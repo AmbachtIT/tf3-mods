@@ -1,0 +1,14 @@
+{
+    "authors": [
+        {
+            "name": "Bram Fokke",
+            "role": "CREATOR"
+        }
+    ],
+    "description": "Throwaway research mod for the Multi-layer Stations project. Adds three probe constructions that answer whether a construction can own infrastructure above and below grade, and whether the module slot picker understands height. Not for publication.\n\nAI Disclaimer: Claude Code was used to create this mod.",
+    "name": "Multi-layer Stations Probe",
+    "summary": "Research probes. Not for publication.",
+    "tags": [
+        "Script Mod"
+    ]
+}

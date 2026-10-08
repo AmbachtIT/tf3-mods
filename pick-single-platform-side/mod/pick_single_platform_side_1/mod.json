@@ -1,0 +1,22 @@
+{
+    "autoActivate": false,
+    "cosmetic": true,
+    "dependencies": null,
+    "incompatibilities": null,
+    "modId": "pick_single_platform_side_1",
+    "options": null,
+    "params": null,
+    "preRunScript": {
+        "fileName": ""
+    },
+    "runScript": {
+        "fileName": "pick_single_platform_side_1::/pick_platform_side.script@runFn"
+    },
+    "postRunScript": {
+        "fileName": ""
+    },
+    "revision": 1,
+    "severityAdd": "None",
+    "severityRemove": "None",
+    "visible": true
+}

@@ -1,0 +1,22 @@
+{
+    "autoActivate": false,
+    "cosmetic": false,
+    "dependencies": null,
+    "incompatibilities": null,
+    "modId": "multi_layer_stations_1",
+    "options": null,
+    "params": null,
+    "preRunScript": {
+        "fileName": ""
+    },
+    "runScript": {
+        "fileName": ""
+    },
+    "postRunScript": {
+        "fileName": ""
+    },
+    "revision": 1,
+    "severityAdd": "None",
+    "severityRemove": "Warning",
+    "visible": true
+}

@@ -1,0 +1,14 @@
+{
+    "authors": [
+        {
+            "name": "Bram Fokke",
+            "role": "CREATOR"
+        }
+    ],
+    "description": "The bus station and the cargo truck station let you pick one, two or four platforms. With two or four the layout is symmetric, but the single platform always ends up on the same side of the entrance - which is sometimes the wrong side for the spot you are building on.\n\nThis mod adds a Platform Orientation option to the placement dialog, next to the platform count. Pick Other side and the lone platform moves across the entrance. The option only appears for a single platform, since two and four have no side to choose.\n\nNothing else changes. The station is built from the game's own platform modules in the game's own slots, so the result is exactly the station you could already assemble by hand after placing it - cost, capacity and appearance are untouched, and no new models are added.\n\nThe mod only changes the placement dialog, so it can be added to or removed from a savegame freely. Stations already built keep their layout.\n\nAI Disclaimer: Claude Code was used to create this mod.",
+    "name": "Pick Single Platform Side",
+    "summary": "Put a one-platform bus or truck station's platform on the other side of its entrance.",
+    "tags": [
+        "Script Mod"
+    ]
+}

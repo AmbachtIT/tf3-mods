@@ -1,0 +1,298 @@
+# Plan
+
+Feasibility: **unproven**. Everything in `NOTES.md` is read out of the install;
+nothing is confirmed in-game. This plan is ordered so that the cheapest probe
+kills the project soonest if it is going to die.
+
+Status after the first probe run, 2026-10-08:
+
+- **Phase 0 - PASSED.** A construction can own a `BRIDGE` edge at +12 m. It
+  renders as a viaduct, the terrain underneath is untouched, and player-drawn
+  track connects to it and works. This was the load-bearing risk for the whole
+  idea and it is closed.
+- **Phase 1 - PARKED.** The `TUNNEL` edge at -12 m renders and accepts a
+  connection, so the construction side works. The player's connecting track
+  trenches instead of tunnelling on flat ground, and chasing that is not worth
+  it yet. **Level -1 is out of scope for the first working version** - see
+  `NOTES.md`, "Parked: level -1", which records what works, the three things to
+  try next, and the likely structural answer.
+- **Phase 3b - blocked, then redesigned.** The standalone slot probe could not
+  be selected after placing, because a construction with no station-like
+  subconstruction has no entity window at all (root `NOTES.md`, "A construction
+  is only selectable if it contains a station-like component"). Replaced with a
+  `loadConstruction` modifier that adds the slot layer to the **stock modular
+  rail station**, which is already selectable. Deployed and validated; awaiting
+  a run.
+
+All probe questions that gate the design are now settled - see
+[probe/TESTS.md](probe/TESTS.md) for the results table. **Phase 4 has started**:
+`mod/multi_layer_stations_1` is v0.1, one rail platform over one bus platform.
+
+Decided along the way: the two levels stay **two separate stations**, not one
+grouped station. It matches in-game practice, lets the player inspect and name
+each level, and costs nothing in the merge - each delegated family keeps its own
+station record. Passengers transfer by walking the pedestrian lane between
+levels rather than for free.
+
+Shape being aimed at: **option A** from `NOTES.md` - three levels at a 12 m
+pitch, each level hosting one whole stock station family offset in z, with
+per-level slot id namespacing and no terrain alignment off grade. Option B stays
+on the table only if a probe rules A out.
+
+
+## Phase 0 - the load-bearing probe: an elevated construction edge
+
+**Question.** Does `edgeType = "BRIDGE"` work from inside a construction?
+Specifically: does the engine generate pillars and abutments for an edge born at
+z = +12, and can the player draw a track to its free node up there?
+
+Nothing in the shipped content does this - the underground station is the only
+construction that sets `edgeType` at all, and it only ever uses `TUNNEL`. If
+this does not work, option A's elevated half is dead and the mod becomes
+"underground only", which changes the whole proposition.
+
+**Spike.** A throwaway construction, no modules, no params beyond what the menu
+forces: one track edge at z = 12 via `constructionutil.addEdges` with
+`edgeType = "BRIDGE"` and `edgeTypeName = "::/infrastructure/bridge/concrete.bridge"`,
+two snap nodes, **zero** `terrainAlignmentLists`. Order of 60 lines.
+
+**What to watch.** Pillars and abutments rendered or not; whether the terrain
+stays put; whether a player-drawn track snaps to the free node; any `ERROR` line
+in `stdout.txt`.
+
+
+## Phase 1 - level -1 *(parked)*
+
+Answered as far as it needs to be: the construction can own a `TUNNEL` edge at
+-12 m and it works. The remaining problem is the player's connecting track, and
+level -1 is out of scope for now. `NOTES.md`, "Parked: level -1", holds the
+state so this can resume without re-deriving it.
+
+Current scope is **level 0 and level +1 only**.
+
+
+## Phase 2 - terrain, on the real station
+
+**Question.** Does dropping the alignment entries actually stop the plateau?
+
+**Spike.** A `loadConstruction` modifier that wraps the modular rail station's
+`updateScript`, calls the stock function via `util.useFn`, and empties
+`result.terrainAlignmentLists` before returning. Same shape as
+`pick-single-platform-side`, so the plumbing is known-good.
+
+**What to watch.** Station sits on raw terrain instead of flattening it; ground
+textures (`groundFaces`) still land, since those are a separate list; nothing
+floats or sinks in a way that makes the station unusable.
+
+The complementary case is already answered: the native `height` slider works but
+carries the terrain up with it, so a station underneath collides (confirmed
+2026-10-08). Stripping the alignment entries is the hypothesis that fixes it.
+
+
+## Phase 3 - one StationGroup, or several?
+
+**Question.** Do several `station` records in one construction join a single
+StationGroup, so lines stopping on different levels can interchange?
+
+This decides how much work option A is. If the answer is yes, vertical
+pedestrian lanes are cosmetic. If no, every level pair needs authored lanes and
+merged `terminals`, and the lane index rebasing across subconstructions becomes
+real work.
+
+**Spike.** Cheapest version is observational: place a stock harbor (passenger +
+cargo stations in one construction) and check whether the line editor offers
+both under one station entry. Confirm against
+`api.engine.system.stationGroupSystem.getStationGroup` from a console or game
+script if the UI is ambiguous.
+
+
+## Phase 3b - the editing probe
+
+Cheap, independent of 0-3, and it decides the UX. Two questions on one
+throwaway construction with slots at z = 0 and z = 12:
+
+1. **Is the slot picker z-aware?** Give the two layers the same slot `type` and
+   see which one a click selects. Then set `slot.height` (undeclared in any
+   shipped content) on both and see whether it changes the answer.
+2. **Does `postConstructionModifiable` work?** Add one param with the flag set
+   and check that the built construction's entity window offers it. No shipped
+   construction sets it, so this is unexercised.
+
+If (2) works, the `editLevel` mechanism in `NOTES.md` is viable and the UX is
+settled regardless of (1). If (1) also turns out z-aware, the level param
+becomes a convenience filter rather than a requirement.
+
+
+## Phase 4 - delegation plumbing *(in progress)*
+
+**v0.1 done, awaiting its first run.** `mod/multi_layer_stations_1` delegates the
+stock rail station to level +1, lifts all of its output by 12 m in one pass at
+the end of a wrapped hook, converts its edges to bridges, drops its terrain
+alignment and ground faces, and adds a hand-built bus platform at grade with its
+own station record.
+
+Why one uniform lift at the end rather than offsetting the slots up front:
+`addLaneLists` runs inside the stock hook and derives lane transforms from model
+transforms, and those models are a mix of module-placed and host-placed. Shifting
+the slots early would split the station across two heights and leave the lane
+list straddling both.
+
+Still to do:
+
+1. **Make level 0 modular** by delegating the street station the same way,
+   instead of the hand-built platform. This is the next step.
+2. Per-level slot id namespacing, needed once two families are delegated. Not
+   needed in v0.1 with only one. In practice the two families' id spaces already
+   differ (rail 6.4-10.8e6, street ~20e6) but not by construction, so namespace
+   anyway.
+3. Per-level transport type params (`level0Type`, `level1Type`).
+4. Road-over-rail as well as rail-over-road.
+5. Force the short catenary (`power_pole_2`) on any level that has something
+   above it - 10.60 m does not fit under a 9.6 m soffit, 8.17 m does.
+6. Shrink or skip the cargo platform collider (-2 .. +14) where it would poke
+   into the level above.
+
+
+## Phase 7 - support alignment under station buildings *(parked)*
+
+**Parked 2026-10-08.** Supports work under platform tiles. Under station
+buildings they sit beneath one side of the building and miss the other, and the
+cause is now known, so resuming should be mechanical.
+
+### What already works
+
+- Supports are a **player-placed module** (`ml_support`), on their own slot layer
+  at grade, aligned to the grid of the level above. Slot ids
+  `600000000 + slot.id * 10 + k`, stable across rebuilds.
+- Each module **sizes itself** from its slot's `spacing`, so one module serves any
+  cell.
+- Geometry is a **facade** - the outer ring of the cell only, hollow inside -
+  tiled from `stone_abut_rep_rep.mdl` (4.4 x 4 x 2 m), six courses to the 12 m
+  pitch, so brickwork lines up between adjacent cells and with the viaduct.
+- Zero-footprint slots (stairs, `{0,0,0,0}`) are skipped.
+- The footprint figures themselves are right, confirmed by the in-game
+  diagnostic: `passenger_platform 5.0x7.8 x5`,
+  `rail_building_size2 20.0x6.7 x3`, `rail_building_size3 40.0x7.4 x5`.
+
+### The bug, and the fix
+
+The footprints are measured in **model space**, but the building module does not
+place its model on the slot axes. `trainstationutil.MakeMainBuildingModule`
+(`trainstationutil.lua:299`) uses:
+
+```lua
+local modelTransf = transf.rotZTransl(math.rad(-90), vec3.new(7.5, 0, 0))
+```
+
+A quarter turn **and** a 7.5 m shift in x. So in slot-local terms the model's
+width and depth are **swapped**, and the footprint is offset sideways - which is
+precisely "under one side of the building but not the other".
+
+Working it through for `rail_building_size1`, whose model bbox is
+x [-9.25, 9.25] (plus connectors to +-10.03) and y [-11, 0]:
+
+- `rotZ(-90)` maps `(x, y) -> (y, -x)`, then `+ (7.5, 0)`;
+- model x `[-10.03, 10.03]` -> slot **y** `[-10.03, 10.03]`, so slot-local
+  depth = 20.1, centred on 0;
+- model y `[-11, 0]` -> slot **x** `[-3.5, 7.5]`, so slot-local width = 11,
+  centred at **+2.0**.
+
+So `FOOTPRINTS` should hold slot-local values, not model-space ones, and needs a
+lateral offset it currently hardcodes to zero:
+
+| slot type | width (slot x) | depth (slot y) | cx | cy |
+| --- | --- | --- | --- | --- |
+| `rail_building_size1` | 11.0 | 20.1 | +2.0 | 0.0 |
+| `rail_building_size2` | 20.05 | 20.0 | +2.5 | 0.0 |
+| `rail_building_size3` | 37.0 | 40.0 | +11.0 | 0.0 |
+
+Those last two rows are derived the same way but **have not been checked** -
+size2's model y is `[-20.05, 0]` and size3's `[-36.025, 1.02]`, and size3 in
+particular may use a different placement transform, since
+`MakeMainBuildingModule` branches on head/side. Verify before trusting them.
+
+`addSupportSlots` already applies `offX`; it just passes `0.0` whenever a
+`FOOTPRINTS` entry exists. Feeding `cx` through is a one-line change.
+
+### The better fix, if model attribution ever lands
+
+All of the above is reverse-engineering a placement transform that the stock
+script owns and could change. The robust version is to **compute each module's
+footprint from the models it actually placed** - which needs the ability to
+attribute models to the module that created them. That is the same missing
+capability as "put the station building at grade" (Phase 8), so if it is ever
+built, both get easier and this table can go.
+
+### The art question, which is separate
+
+`stone_abut_rep_rep.mdl` is a **bridge abutment** with one finished face. Tiled
+into a four-sided ring it shows its unfinished side on two of them. Alignment is
+fixable; this is not, without custom art. See the README's accepted limitations.
+
+
+## Phase 8 - placing a module at a different level from its family
+
+Needed by both "station building at grade" and the robust fix in Phase 7. The
+rail subconstruction is lifted as a single unit, so there is currently no way to
+exempt one module's geometry from the lift, or to find out which models a given
+module produced.
+
+Worth knowing before starting: the stock hook copies `result.models` into its
+subconstruction **by reference**, and modules add models through an `addModel`
+whose target list is passed in, so a snapshot of list lengths around the module
+pass is the obvious starting point - the rail `updateFn` emits no geometry at
+all, so everything present before the hook runs came from modules.
+
+
+## Phase 6 - catchment from station buildings
+
+**Largely done 2026-10-08.** Both levels now seed a station building, so
+catchment and capacity come from module metadata the way the stock stations do
+it - rail `main_building_1_era_*` at slot `3400020`, street
+`era_*_passenger_building_10_10` at `MangleId({0, 0, small_building})`. The stock
+`no catchment areas generated` warning is gone and the catchment fallback no
+longer fires, which confirms the rail building's slot id was inferred correctly.
+
+The direct overrides are kept as a **safety net that warns when it fires**, so a
+wrong slot id after a game update shows up as a log line rather than as a station
+that quietly stops attracting passengers.
+
+That is a stopgap, not the intended behaviour. **Catchment should come from the
+station buildings the player places**, because that is what a player expects: add
+a building, the station reaches further. The current version ignores what is
+built on it, which will feel arbitrary as soon as anyone looks.
+
+Still open:
+
+1. **Whether to keep the floor.** With catchment purely module-driven, deleting
+   every building leaves a station that silently stops working. Confirmed to be
+   exactly how the stock stations behave - none of them passes a
+   `defaultCatchment` - so matching them is defensible. The current compromise
+   keeps a fallback but warns, which is neither stock behaviour nor a silent
+   failure. Decide deliberately.
+2. The street building's slot id is inferred the same way the rail one was, from
+   `MangleId({coordI, 0, moduleVariants.small_building})`. If the pool-capacity
+   fallback stops firing, it landed.
+
+
+## Phase 5 - the build UI
+
+Design settled in `NOTES.md`, "Editing: how clicking picks a level". Build it:
+
+1. An `editLevel` param, values -1 / 0 / +1, `postConstructionModifiable = true`.
+2. `updateFn` emits slots for the active level only, so a click is unambiguous.
+3. Per-level slot types (`l0_track`, `lp1_track`, `lm1_track`) so the MODULES
+   menu is per-level, with `skipCollisionCheck = true` in each `slotConfig`
+   entry.
+4. Gate the per-level construction params with a `checkEnabledScript` returning
+   `Hidden` for the inactive levels, so the toolbar only shows the live set.
+
+Relax step 2 to "all levels always have slots" only if Phase 3b shows the picker
+is z-aware.
+
+
+## Deployment
+
+Staging area only, per the root `CLAUDE.md`. Copy
+`pick-single-platform-side/deploy.ps1` and change `$ModId` and the log prefix.
+No mod.io id yet, so nothing to rescue in `_metadata/` until the first publish.

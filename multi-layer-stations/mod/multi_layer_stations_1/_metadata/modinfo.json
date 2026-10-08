@@ -1,0 +1,14 @@
+{
+    "authors": [
+        {
+            "name": "Bram Fokke",
+            "role": "CREATOR"
+        }
+    ],
+    "description": "Unlocks the vertical axis for station building. A multi-layer station puts an elevated train platform over a bus platform at street level, as two separate stations in one structure - connect a road to the lower level and a track to the upper one.\n\nAI Disclaimer: Claude Code was used to create this mod.",
+    "name": "Multi-layer Stations",
+    "summary": "Build an elevated train station over a bus station.",
+    "tags": [
+        "Station"
+    ]
+}

@@ -1,0 +1,10 @@
+# LF everywhere: in the repository and in the working tree, so a checkout on
+# Windows round-trips byte-for-byte. This overrides core.autocrlf, which is
+# set to true on this machine and would otherwise rewrite every text file to
+# CRLF on checkout. The game reads .lua/.tl with either ending.
+* text=auto eol=lf
+
+# Exception. The in-game publisher writes this file itself, with CRLF, and the
+# game reads it back to decide which mod.io mod a folder is. Keep the bytes
+# exactly as published rather than normalising the line ending.
+**/_metadata/mod.io_fileid.txt -text
