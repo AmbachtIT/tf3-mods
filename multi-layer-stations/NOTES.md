@@ -431,7 +431,24 @@ come from `trainstationutil`, which sets `snapNodes` on their ends, and a snap
 node is where the engine joins to the outside world - plausibly where it decides
 an abutment is needed.
 
-**The answer, found by bisection: `Slot.alignToTerrain`.**
+**Superseded 2026-10-09. The answer was an _empty_ `terrainAlignmentLists`, not
+`Slot.alignToTerrain`.** The section below is kept because its bisection is
+sound and its table is still the record of what was observed - but its
+conclusion was overtaken by the root `NOTES.md` finding "An **empty**
+`terrainAlignmentLists` is not 'leave the terrain alone'", which tested
+`Slot.alignToTerrain` against a build that could falsify it and **cleared it**.
+The fix in the code is the grade anchor; nothing sets `slot.alignToTerrain`.
+
+Leaving the two accounts to disagree had a cost. The elevated track's
+`snapNodes` were converted to `freeNodes` as part of this same terrain hunt, on
+the same mistaken theory, and the conversion was never revisited once the real
+cause was found - it surfaced much later as "modules cannot be deleted once a
+track is connected" (root `NOTES.md`, "A station's `snapNodes` are
+load-bearing"). **When a bisect finds the real cause, revert the things that
+were tried on the way and left in, and mark the superseded account as
+superseded.**
+
+The original account follows.
 
 The bridge/abutment theory was wrong, and so was the edge theory. Cutting the
 construction down one part at a time settled it in a single session:
@@ -467,6 +484,12 @@ A caution for the elevated level generally: **anything carrying an implicit
 things named `terrainAlignment*`.** The candidates found so far are
 `terrainAlignmentLists`, `groundFaces`, `EdgeList.alignTerrain` and
 `Slot.alignToTerrain`.
+
+*And the counter-caution, learned the expensive way: that list is a list of
+**candidates**, not of things to switch off pre-emptively. Of the four, only
+`terrainAlignmentLists` turned out to matter, and the collateral damage came
+from switching off a fifth thing - `snapNodes` - that was never on the list and
+is not a terrain control at all.*
 
 **Lesson worth keeping separately from the answer:** three rounds were spent
 reasoning from the stock sources about what should be in the result, when one
@@ -526,6 +549,51 @@ Each family contributes its own station subconstruction, so a two-level station
 has two station records - which makes the StationGroup question (does a line
 stopping on one level let passengers reach the other?) the next thing that
 actually matters.
+
+
+## The elevated track carries no bridge
+
+**Decided 2026-10-09.** The elevated track's edge lists keep `edgeType` at its
+default `NORMAL`. They used to be `BRIDGE` on `::/infrastructure/bridge/stone.bridge`.
+
+It worked - Phase 0 proved it, and that probe closed the load-bearing risk for
+the whole mod, so this is not a retraction of that finding. The problem is that
+a bridge type is a **generic** answer to "hold this up": the engine generates
+pillars and abutments from the edge alone, knowing nothing about what the
+construction has at grade, so the structure pushed straight through the bus
+station below. `pillarMinDist = 60` / `pillarTargetDist = 72` /
+`pillarMaxDist = 84` leave no room to dodge anything, and the engine's own
+pillar-dodging (`Proposal.Context.extendProposalRedoPillars`) only applies to
+bridges it generates from player-drawn edges, not from a construction's.
+
+This is the same argument that already moved supports out of `updateFn` and
+into player-placed modules, and it is worth stating as a rule, because it has
+now come up twice:
+
+> **Nothing automatic can know what the player means to put under the deck.**
+> A multi-level station's structure has to be placed, not generated.
+
+So the deck is bare, and looking tidy is the job of modules with art made for
+it. Two consequences:
+
+- **Track tiles now get support slots too.** They were previously skipped
+  precisely because the viaduct carried them; without it they would be the one
+  part of the deck with no way to support it. Their `spacing` is the same
+  5 x 39 m as a platform tile, so no special case was needed.
+- **The support brick's one remaining argument is gone.** It is
+  `stone_abut_rep_rep.mdl`, chosen partly so the brickwork would match the
+  stone viaduct. There is no viaduct to match now, so the choice of *stone* is
+  arbitrary until there is purpose-made art.
+
+`alignTerrain = false` stays on those edge lists. It is the explicit "do not
+deform the ground along this edge" control and has nothing to do with whether
+the edge has a structure.
+
+Still open, and the first thing to watch: **does the engine mind a `NORMAL`
+track edge at +12 with nothing beneath it?** The Open Questions below already
+ask whether geometry at height needs support and conclude probably not, on the
+evidence of roofs at 5.5 m and the main buildings - but no stock construction
+puts a *track* up there unsupported, and `BRIDGE` is what Phase 0 tested.
 
 
 ## The player's connecting edge earthworks, in both directions
@@ -618,6 +686,31 @@ parking it.
 12.16 m envelope and by the underground station's exactly -12 first drop. With
 -1 parked, neither constrains anything, so a future level -1 may want 13 m - see
 "How tall is a level?" above.
+
+
+## A rail building slot type does not tell you the building's size
+
+Read out of the install 2026-10-09, while reviewing for the beta. It matters
+because the support layer sizes itself from the thing above it, and the obvious
+key - the slot type - is not one:
+
+| slot type | `extend` of the modules that declare it |
+| --- | --- |
+| `rail_building_size1` | `6, -6, 0, -17` |
+| `rail_building_size2` | `11, -11, 0, -17` **and** `11, -11, 0, -23` **and** `11, -11, 0, -38` |
+| `rail_building_size3` | `21, -21, 0, -38` |
+
+`main_building_1` and `main_building_2` are both `rail_building_size2` at 17 m
+and 23 m deep, and `side_building_3_cargo` is also `rail_building_size2` at
+38 m. The names also mislead: `main_building_1` goes in a *size2* slot, and
+`addSlot(id, ...)` / `id+1` / `id+5` hand out size2, size3 and size1 from one
+base id (`modular_station.script.lua:688-692`).
+
+`config.extend` in the module's `updateScript.params` is `{ xMax, xMin, yMax,
+yMin, ... }` in model space and is uniform across eras, so it is the right
+source - keyed by module name, or read off the module desc at runtime if
+`api.res.moduleRep.get(...).updateScript.params` is reachable (rail reads
+`.metadata` off that desc, so the desc is). See `PLAN.md` Phase 7.
 
 
 ## Open questions

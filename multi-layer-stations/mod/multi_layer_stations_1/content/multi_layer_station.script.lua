@@ -47,10 +47,38 @@ local PITCH = 12.0
 local RAIL_SCRIPT = "::/stations/rail/modular_station/modular_station.script"
 local STREET_SCRIPT = "::/stations/street/modular_street_station/modular_terminal.script"
 
---- Stone, and only stone: the one general-purpose bridge with `yearFrom = 0`,
---- so it is never unavailable and never looks wrong for the era. Steel (1940),
---- concrete (1970) and the RAIL-only trestle are a refinement for later.
-local BRIDGE = "::/infrastructure/bridge/stone.bridge"
+--- The era a missing `year` falls back to.
+---
+--- The engine puts `year` into every construction's params - `constructionComp.params["year"]`,
+--- read at `gui/construction/construction.tl:4355` - and both stock families
+--- rely on it: street does a bare `params.year >= eraCStart`
+--- (`modular_terminal.script.lua:1357`) and rail a bare `year >= eraCStart`.
+--- A nil would therefore not degrade, it would raise "attempt to compare nil
+--- with number" *inside stock code*, where the traceback points at a file this
+--- mod does not own. One default here turns a hard failure into a wrong era.
+local FALLBACK_YEAR = 1990
+
+--- Our own slot layer, declared up here because the module classifier below
+--- needs it. The reasoning behind player-placed supports is further down, at
+--- "holding the elevated level up".
+local SUPPORT_TYPE = "ml_support"
+--- Clear of both families: rail ids reach about 11e6, street about 20e6.
+--- `slot.id * 10 + k` keeps the mapping stable across rebuilds, which matters
+--- because `params.modules` is keyed by it and survives a savegame.
+---
+--- **Frozen at the first public release.** A slot id is a savegame key, so
+--- changing this orphans every support a player has placed.
+local SUPPORT_SLOT_BASE = 600000000
+
+--- **Leave the elevated track's `snapNodes` alone.** Confirmed 2026-10-09; see
+--- ../NOTES.md, "A station's snapNodes are load-bearing".
+---
+--- v0.1 converted them into `freeNodes`, on the theory that "a snap node is
+--- where the engine joins the edge to the world, and at +12 that is where it
+--- brings the ground up to meet it". The theory was wrong on both halves: the
+--- terrain is fine without the conversion, and emptying `snapNodes` broke
+--- module editing as soon as a track was connected - every module except the
+--- one at the connection refused with "construction not possible".
 
 --- What is done to the rail level: **turn it a quarter turn, then raise it.**
 ---
@@ -84,6 +112,10 @@ local RAIL_XF = transf.mul(
 -- resource names and resolving stock functions
 --------------------------------------------------------------------------------
 
+--- Where the street family's content lives, for resolving its **bare-relative**
+--- resource ids. See `absoluteRes`.
+local STREET_DIR = "/stations/street/modular_street_station/"
+
 --- Make a base-game resource name absolute from inside a mod.
 ---
 --- A path starting with `/` resolves inside **this mod's** namespace, not the
@@ -91,7 +123,23 @@ local RAIL_XF = transf.mul(
 --- returned from a template function, and of model ids and `.street_template`
 --- names inside a delegated result - where an unresolvable id does not error,
 --- the game just draws a placeholder cube.
-local function absoluteRes(name)
+---
+--- There is a **third** form, and it was being missed: an id with no leading
+--- slash at all, which resolves against the *resource's own directory*. One
+--- module file mixes all three - `era_c_passenger_building_10_10.module.lua`
+--- has `::/assets/...`, `/assets/...` and bare
+--- `models/sidebuildings/streetstation_sidebuilding_era_c_s1.mdl` side by side.
+--- The bare one came through here unchanged and then resolved inside this mod:
+---
+---     Resource error: referenced model not found:
+---     'multi_layer_stations_1::/models/sidebuildings/streetstation_sidebuilding_era_c_s1.mdl'
+---     in 'multi_layer_stations_1::/multi_layer_station.con (key: id)'
+---
+--- so the bus station's side building was a missing model on every rebuild.
+--- `baseDir` is what a bare name is relative to; without one a bare name is
+--- still passed through, which is correct for the rail family - it uses no bare
+--- ids at all (checked across both `.zip`s: street has 42, rail none).
+local function absoluteRes(name, baseDir)
 	if type(name) ~= "string" then
 		return name
 	end
@@ -100,6 +148,9 @@ local function absoluteRes(name)
 	end
 	if string.sub(name, 1, 1) == "/" then
 		return "::" .. name
+	end
+	if baseDir ~= nil then
+		return "::" .. baseDir .. name
 	end
 	return name
 end
@@ -264,22 +315,99 @@ local function seedBothLevels(year)
 	return seeded
 end
 
---- Split a module map by which family owns each module, by name. Ranges would
---- not do it: the two id spaces overlap in principle even though they rarely do
---- in practice.
+--- Which of the three parties owns a module: `"support"`, `"street"` or
+--- `"rail"`.
+---
+--- Primary test is the **module name**, because the two families' slot id
+--- spaces overlap in principle even though they do not in practice - street is
+--- `200000 * (coordJ + 100) + 100 * (coordI + 100) + variant`
+--- (`modular_terminal.script.lua:1164`), so a sufficiently negative coordJ
+--- reaches down into rail's 3.4e6-11.2e6.
+---
+--- Our own slots are decided by **id**, not name, and that is deliberate: the
+--- id is ours to hand out, whereas the name belongs to whoever authored the
+--- module. A third-party support module - the point of publishing this - would
+--- not have `ml_support` in its name, and under the old name test it fell
+--- through to the rail bucket, where rail's `pairs(params.modules)` sweep would
+--- count it and `GetCoord` would decode its id to nonsense.
+---
+--- Anything that matches nothing is reported and then placed by id band. The
+--- bands are deliberately wider than the real ranges: the point is to classify
+--- a stranger plausibly rather than to re-derive the mangling.
+local RAIL_ID_MAX = 15000000
+local STREET_ID_MAX = 500000000
+
+local function familyOf(slotId, entry)
+	if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE then
+		return "support"
+	end
+
+	local name = (type(entry) == "table" and entry.name) or entry
+	if type(name) == "string" then
+		if string.find(name, "/stations/street/", 1, true) then
+			return "street"
+		end
+		if string.find(name, "/stations/rail/", 1, true)
+			or string.find(name, "/trainstation_", 1, true) then
+			return "rail"
+		end
+	end
+
+	-- A module from neither family and not in one of our slots. Say so once per
+	-- rebuild rather than guessing silently: "my module behaves oddly on the
+	-- upper level" is otherwise unattributable from a log.
+	local byBand = "rail"
+	if type(slotId) == "number" and slotId > RAIL_ID_MAX and slotId <= STREET_ID_MAX then
+		byBand = "street"
+	end
+	log.warning(LOG .. "module '" .. tostring(name) .. "' in slot "
+		.. tostring(slotId) .. " belongs to neither stock family and is not in"
+		.. " one of our slots - routing it to the " .. byBand .. " level by id."
+		.. " If this is a mod-added module, give it slot type '" .. SUPPORT_TYPE
+		.. "' or name it under /stations/rail/ or /stations/street/.")
+	return byBand
+end
+
+--- Report a module edit: what the engine asked for, and what the map looks
+--- like afterwards.
+---
+--- One line per actual edit, not per hover frame, so it is cheap - and it is
+--- kept in for the beta deliberately. "Construction not possible" is reported
+--- by the engine with **nothing whatsoever in the log**, so without this there
+--- is no way to distinguish an edit the engine refused from one that never
+--- reached `updateFn` in the first place. Pair it with the module counts on the
+--- `built:` line: a delete that is being applied shows one fewer module there
+--- on the next rebuild.
+local function countModules(params)
+	local n = 0
+	for _k, _v in pairs(params.modules or {}) do n = n + 1 end
+	return n
+end
+
+local function logChange(route, params, change, fam, before)
+	local entry = change.module or (params.modules or {})[change.slotId]
+	local name = (type(entry) == "table" and entry.name) or entry
+	log.message(LOG .. "module " .. (change.added and "add" or "remove")
+		.. " slot=" .. tostring(change.slotId)
+		.. " family=" .. tostring(fam)
+		.. " via=" .. route
+		.. " modules=" .. tostring(before) .. "->"
+		.. tostring(countModules(params))
+		.. " name=" .. tostring(name))
+end
+
+--- Split a module map by which family owns each module.
+---
+--- Our own support modules are in neither bucket: the engine instantiates them
+--- from the construction's own `params.modules`, and handing one to a stock
+--- family would only have it iterate over something it cannot interpret.
 local function splitModules(modules)
 	local rail, street = {}, {}
 	for slotId, entry in pairs(modules or {}) do
-		local name = (type(entry) == "table" and entry.name) or entry
-		if type(name) == "string" and string.find(name, "ml_support", 1, true) then
-			-- Ours, not theirs. The engine instantiates it from the
-			-- construction's own `params.modules`; handing it to a stock family
-			-- would only have it iterate over something it cannot interpret.
-			local _ = nil
-		elseif type(name) == "string" and
-			string.find(name, "/stations/street/", 1, true) then
+		local fam = familyOf(slotId, entry)
+		if fam == "street" then
 			street[slotId] = entry
-		else
+		elseif fam == "rail" then
 			rail[slotId] = entry
 		end
 	end
@@ -352,6 +480,28 @@ local function gradeAnchor()
 			{ -0.1,  0.1, 0.0, 1.0 },
 			{ -0.1, -0.1, 0.0, 1.0 },
 		} },
+	}
+end
+
+--- A complete but empty result, for the case where a stock `updateFn` cannot be
+--- resolved at all.
+---
+--- Returning a bare `{}` was the previous behaviour and it is not safe: every
+--- stock construction hands the engine a full set of lists, and the engine
+--- reads them without checking - `updateFn` returning `{}` leaves it to walk
+--- fields that are not there. This returns the same shape with nothing in it,
+--- so the failure is "an empty construction plus a warning in the log" instead
+--- of an exception from inside the builder.
+---
+--- `terrainAlignmentLists` carries the grade anchor rather than being empty,
+--- for the usual reason: an empty list means "fit the terrain to the geometry".
+local function emptyResult()
+	return {
+		models = {}, colliders = {}, groundFaces = {}, laneLists = {},
+		edgeLists = {}, slots = {}, slotConfig = {}, subconstructions = {},
+		labelText = {}, dependentSlots = {},
+		terrainAlignmentLists = { gradeAnchor() },
+		cost = 0, maintenanceCost = 0,
 	}
 end
 
@@ -450,21 +600,26 @@ local function liftRail(result, railResult, xf, railSlots)
 			for j, edge in ipairs(el.edges or {}) do
 				el.edges[j] = { xfPos(edge[1], xf), xfDir(edge[2], xf) }
 			end
-			el.edgeType = "BRIDGE"
-			el.edgeTypeName = BRIDGE
+			-- **No bridge.** `edgeType` is left at its default, `NORMAL`, so
+			-- the elevated track carries no structure of its own.
+			--
+			-- It used to be `BRIDGE` on `stone.bridge`, which did render a
+			-- viaduct - but a bridge type is a *generic* answer to "hold this
+			-- up", and it has no idea there is a bus station underneath it, so
+			-- its pillars and abutments pushed straight through the lower
+			-- level. That is the same argument that already moved supports out
+			-- of `updateFn` and into player-placed modules: nothing automatic
+			-- can know what the player means to put under the deck.
+			--
+			-- So the deck is bare, and looking tidy is a job for modules with
+			-- art made for it. `alignTerrain = false` stays - that is the
+			-- explicit "do not deform the ground along this edge" control
+			-- (`construction_util_serialized.d.tl:153`, the airfield
+			-- precedent), and it is unrelated to the edge having a structure.
 			el.alignTerrain = false
 
-			-- Track ends become **free** rather than snap nodes. A snap node is
-			-- where the engine joins the edge to the world, and at +12 that is
-			-- where it brings the ground up to meet it; a free node is still
-			-- connectable and does not.
-			if #(el.snapNodes or {}) > 0 then
-				el.freeNodes = el.freeNodes or {}
-				for _j, n in ipairs(el.snapNodes) do
-					el.freeNodes[#el.freeNodes + 1] = n
-				end
-				el.snapNodes = {}
-			end
+			-- `snapNodes` is deliberately left exactly as `trainstationutil`
+			-- built it. See the note at the top of the file.
 		end
 	end
 
@@ -474,6 +629,21 @@ local function liftRail(result, railResult, xf, railSlots)
 		end
 	end
 
+	-- Guard, not a diagnostic: a track run always has two ends, so a TRACK edge
+	-- list that has edges but **no** snap nodes means something in this file
+	-- stripped them. That exact state is what broke module editing once a track
+	-- was connected, and it is invisible from the game - the engine refuses the
+	-- rebuild with nothing in the log. Cheap to check, so check it rather than
+	-- rely on the comment above surviving the next edit.
+	for i, el in ipairs(result.edgeLists or {}) do
+		if el.type == "TRACK" and #(el.edges or {}) > 0
+			and #(el.snapNodes or {}) == 0 then
+			log.warning(LOG .. "track edge list " .. tostring(i) .. " has "
+				.. tostring(#el.edges) .. " edges and no snapNodes. Modules"
+				.. " will not be deletable once a track is connected - see"
+				.. " ../NOTES.md, \"A station's snapNodes are load-bearing\".")
+		end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -621,13 +791,16 @@ end
 --- `/stations/shared/industry_floor_high_priority.gtex`), and neither errors
 --- when unresolvable. A model silently becomes a placeholder; a ground texture
 --- silently becomes sand.
-local function absolutiseSub(sub)
+--- `baseDir` is the family's own resource directory, for the bare-relative ids
+--- only street uses. Passing it per family is why this is called from the
+--- per-family loop in `finish` rather than over the merged list.
+local function absolutiseSub(sub, baseDir)
 	for _i, m in ipairs(sub.models or {}) do
-		m.id = absoluteRes(m.id)
+		m.id = absoluteRes(m.id, baseDir)
 	end
 	for _i, face in ipairs(sub.groundFaces or {}) do
 		for _j, mode in ipairs(face.modes or {}) do
-			mode.key = absoluteRes(mode.key)
+			mode.key = absoluteRes(mode.key, baseDir)
 		end
 	end
 end
@@ -638,8 +811,13 @@ end
 
 --- A brick course from the stone bridge's abutment: 4.4 x 4 x 2 m
 --- (`stone.bridge.lua:24-27`), built to be tiled and to carry a deck. Six
---- courses make the 12 m pitch, and the stonework matches the viaduct carrying
---- the track.
+--- courses make the 12 m pitch.
+---
+--- Borrowed art, and it shows - it is an abutment with one finished face, so a
+--- four-sided cell presents its unfinished side on two of them. It was also
+--- chosen partly to match the stone viaduct that used to carry the track, and
+--- that viaduct is gone, so the one argument for *stone* specifically has gone
+--- with it. This is placeholder art pending models made for the job.
 local SUPPORT_BRICK = "::/infrastructure/bridge/stone/stone_abut_rep_rep.mdl"
 local SUPPORT_BRICK_D = 4.0
 local SUPPORT_BRICK_H = 2.0
@@ -657,12 +835,8 @@ local SUPPORT_BRICK_H = 2.0
 --- So the supports become modules. The slots sit under the elevated platforms,
 --- subdivided along each 40 m tile so a player can wall off the spans they want
 --- and leave the rest open for roads.
-local SUPPORT_TYPE = "ml_support"
---- Clear of both families: rail ids reach about 11e6, street about 20e6.
---- `slot.id * 10 + k` keeps the mapping stable across rebuilds, which matters
---- because `params.modules` is keyed by it and survives a savegame.
-local SUPPORT_SLOT_BASE = 600000000
-local SUPPORT_CELLS_PER_TILE = 5
+--- `SUPPORT_TYPE` and `SUPPORT_SLOT_BASE` are declared at the top of the file,
+--- because the module classifier needs them.
 local SUPPORT_CELL_D = 8.0
 
 --- Real footprints of the things that sit on the elevated level, by slot type.
@@ -684,8 +858,7 @@ local FOOTPRINTS = {
 	rail_building_size3 = { w = 40.0, d = 37.0, cy = -17.5 },
 }
 
---- One support slot per cell, under **everything** on the elevated level that is
---- not track.
+--- One support slot per cell, under **everything** on the elevated level.
 ---
 --- Driven by each slot's own `spacing`, which is `{left, right, back, front}` as
 --- half-extents from the slot centre, so the footprint of anything up there is
@@ -695,17 +868,21 @@ local FOOTPRINTS = {
 --- first version only handled platforms, which left the station buildings with
 --- no support slots underneath them at all.
 ---
---- Track tiles are skipped: the viaduct on their edges already carries them.
+--- Track tiles **are** included, as of 2026-10-09. They used to be skipped
+--- because the `BRIDGE` edge type put a viaduct under them; with the bridge
+--- gone (see `liftRail`) they would otherwise be the one part of the deck with
+--- no way to support it at all. Their `spacing` is the same 5 x 39 m as a
+--- platform tile, so they need no special case.
 ---
 --- Called from `updateFn`, not the hook: the engine reads `slots` for the module
 --- pass before any hook runs, so they must exist by then. Both the rail slots
 --- and the level transform are known at that point.
-local function addSupportSlots(result, railResult, xf, modules)
+local function addSupportSlots(result, railResult, xf, modules, allModules)
 	local added = 0
 	local sized = {}
 	for _i, slot in ipairs(railResult.slots or {}) do
 		local sp = slot.spacing
-		if slot.type ~= "track" and sp ~= nil and modules[slot.id] ~= nil then
+		if sp ~= nil and modules[slot.id] ~= nil then
 			-- A measured footprint where we have one, falling back to the slot
 			-- reservation otherwise - which is right for platform tiles, whose
 			-- spacing does describe the tile.
@@ -762,6 +939,31 @@ local function addSupportSlots(result, railResult, xf, modules)
 	result.slotConfig = result.slotConfig or {}
 	result.slotConfig[SUPPORT_TYPE] = { skipCollisionCheck = true }
 
+	-- Support modules whose slot no longer exists.
+	--
+	-- A support slot is only created where the rail level has a module above it
+	-- (`modules[slot.id] ~= nil` in the loop above), so **removing a platform
+	-- orphans the supports under it**. The engine's answer to a module with no
+	-- slot is to drop it - "N modules will be removed" - which is survivable,
+	-- but it is also the first thing to suspect when a module edit is refused
+	-- outright, and it is invisible otherwise.
+	local have = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		have[slot.id] = true
+	end
+	local orphans = 0
+	for slotId, _entry in pairs(allModules or {}) do
+		if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE
+			and not have[slotId] then
+			orphans = orphans + 1
+		end
+	end
+	if orphans > 0 then
+		log.warning(LOG .. tostring(orphans) .. " support module(s) have no slot"
+			.. " any more - the level above them was removed. The engine will"
+			.. " drop them.")
+	end
+
 	-- What footprint each kind of thing got, and what slot types exist at all.
 	-- The second half is how to tell whether a stairs slot
 	-- (`rail_building_size4`) was created: the rail station only makes one where
@@ -798,8 +1000,8 @@ end
 --- `[-w/2, w/2] x [-d/2, d/2]`.
 ---
 --- Tiled from one abutment course so the brickwork lines up between adjacent
---- modules and with the viaduct: the course is 4.4 wide x 4 deep x 2 tall, and
---- it anchors at its own back edge in y.
+--- modules: the course is 4.4 wide x 4 deep x 2 tall, and it anchors at its own
+--- back edge in y.
 local function supportModels(width, depth)
 	local models = {}
 	local courses = math.max(1, math.floor(PITCH / SUPPORT_BRICK_H + 0.5))
@@ -854,6 +1056,45 @@ local function isPersonLane(lane)
 	return false
 end
 
+--- A position key for "is this the same node as that one", to 1 cm.
+---
+--- Lanes join where their nodes **coincide**, and the engine's own test is
+--- exact, so this is only used the conservative way round: a near-match counts
+--- as a match and the candidate is rejected. Over-rejecting costs a warning;
+--- under-rejecting costs an assertion failure on the simulation thread.
+local function nodeKey(p)
+	return string.format("%.2f,%.2f,%.2f", p[1], p[2], p[3])
+end
+
+--- Every node belonging to a lane that is **not** a person lane.
+---
+--- This is the one hard safety rule in the whole file. A PERSON lane that
+--- shares a node with a vehicle lane kills the game outright:
+---
+---     Assertion `person0 == person1' failed.
+---     TransportNetworkSystem.cpp:116, IsValidTransition
+---
+--- (root NOTES.md, "A PERSON lane must never share a node with a vehicle
+--- lane"). The link below attaches to an existing person node, which is the
+--- correct way to join two person lanes - but if a stock family ever puts a
+--- person node and a bus node at the same position, attaching there turns a
+--- latent coincidence into a fatal one. So those positions are excluded as
+--- link endpoints, and a station with no safe endpoint gets a warning and no
+--- link rather than a crash.
+local function vehicleNodeKeys(result)
+	local keys = {}
+	for _i, sub in ipairs(result.subconstructions or {}) do
+		for _j, lane in ipairs(sub.laneLists or {}) do
+			if not isPersonLane(lane) then
+				for _k, node in ipairs(lane.nodes or {}) do
+					keys[nodeKey(applyMat(lane.transf, node[1]))] = true
+				end
+			end
+		end
+	end
+	return keys
+end
+
 --- Pick one pedestrian node at grade and one on the elevated platform.
 ---
 --- Derived from the assembled lane lists rather than from guessed coordinates:
@@ -865,13 +1106,17 @@ end
 --- plan, so the stairs are as short and as central as possible.
 local function findLevelNodes(result, dz)
 	local lowNodes, highNodes = {}, {}
+	local avoid = vehicleNodeKeys(result)
+	local rejected = 0
 
 	for _i, sub in ipairs(result.subconstructions or {}) do
 		for _j, lane in ipairs(sub.laneLists or {}) do
 			if isPersonLane(lane) then
 				for _k, node in ipairs(lane.nodes or {}) do
 					local p = applyMat(lane.transf, node[1])
-					if p[3] > dz * 0.5 then
+					if avoid[nodeKey(p)] then
+						rejected = rejected + 1
+					elseif p[3] > dz * 0.5 then
 						highNodes[#highNodes + 1] = p
 					else
 						lowNodes[#lowNodes + 1] = p
@@ -879,6 +1124,11 @@ local function findLevelNodes(result, dz)
 				end
 			end
 		end
+	end
+
+	if rejected > 0 then
+		log.message(LOG .. "skipped " .. tostring(rejected) .. " person node(s)"
+			.. " that coincide with a vehicle lane node")
 	end
 
 	local best, bestLow, bestHigh = nil, nil, nil
@@ -936,19 +1186,31 @@ local function finish(result, streetResult, railResult)
 	-- Re-read each family's own fields: both hooks **reassign**
 	-- `result.subconstructions`, so whatever the merged table held before is
 	-- stale. Grade level first, so its subconstruction is index 1.
+	--
+	-- Tags are assigned from a **per-family base**, not from the position in
+	-- the combined list. Two reasons:
+	--
+	--  * they have to be unique, because a duplicate crashes the game outright
+	--    (root NOTES.md, "Two subconstructions must not share a tag") - and
+	--    each family invents low numbers of its own, so the raw tags collide;
+	--  * `PopulateOld2NewSubconstructions` matches a rebuild's subconstructions
+	--    to the previous ones **by tag**. Numbering 1..n over the concatenation
+	--    makes the rail level's tag depend on how many subconstructions the
+	--    street level happened to produce, so deleting the last street module
+	--    would silently renumber the rail station from 2 to 1 and break that
+	--    match on the very next rebuild.
+	--
+	-- Bases are 100 apart, which is far more headroom than either family uses.
+	-- **Frozen at the first public release**: a tag is how a savegame's
+	-- subconstruction is recognised after a rebuild.
 	result.subconstructions = {}
-	for _i, src in ipairs({ streetResult, railResult }) do
-		for _j, sub in ipairs(src.subconstructions or {}) do
+	for _i, src in ipairs({ { streetResult, 1, STREET_DIR }, { railResult, 101, nil } }) do
+		local base = src[2]
+		for j, sub in ipairs(src[1].subconstructions or {}) do
+			sub.tag = base + j - 1
+			absolutiseSub(sub, src[3])
 			result.subconstructions[#result.subconstructions + 1] = sub
 		end
-	end
-
-	-- Unique tags across both families. Each uses low numbers of its own, and a
-	-- collision crashes the game outright - `PopulateOld2NewSubconstructions`
-	-- keys a map by tag and asserts on the insert.
-	for i, sub in ipairs(result.subconstructions or {}) do
-		sub.tag = i
-		absolutiseSub(sub)
 	end
 
 	-- Guarantee every station has a catchment area.
@@ -1016,7 +1278,13 @@ local function finish(result, streetResult, railResult)
 	-- else is wrong. If it is missing, what is being seen is only the entrance
 	-- *edge* snapping through its `snapNodes = { 1 }`, which is edge-level and
 	-- says nothing about the construction's orientation.
-	local sp = streetResult.snapPoint or result.snapPoint
+	-- Report the one that will actually be **used**, which is the module's.
+	-- This read used to be `streetResult.snapPoint or result.snapPoint` - the
+	-- other way round from the line below that picks the winner - so it
+	-- faithfully printed the hook's origin default on every rebuild and
+	-- reported `fromStreetResult=true` while the good one was in use. A
+	-- diagnostic that contradicts the code is worse than none.
+	local sp = result.snapPoint or streetResult.snapPoint
 	if sp == nil then
 		log.warning(LOG .. "no snapPoint on the result - the station cannot"
 			.. " orient itself to a road")
@@ -1028,7 +1296,7 @@ local function finish(result, streetResult, railResult)
 			.. string.format("%.2f,%.2f", t and t[1] or 0, t and t[2] or 0)
 			.. ") edgeTypes=" .. tostring(sp.snapToBaseEdgeTypes
 				and #sp.snapToBaseEdgeTypes or 0)
-			.. " fromStreetResult=" .. tostring(streetResult.snapPoint ~= nil))
+			.. " source=" .. (result.snapPoint ~= nil and "module" or "streetHook"))
 	end
 
 	-- The level at grade decides what the construction snaps to, and the one to
@@ -1075,8 +1343,145 @@ return {
 		return supportModels(5.0, SUPPORT_CELL_D)
 	end,
 
+	--- What happens to `params.modules` when the player adds or removes one
+	--- module.
+	---
+	--- Delegating this was missing, and the symptom is subtle enough to be
+	--- worth spelling out. **A street passenger platform is two slots, not
+	--- one.** `preProcessFn` (`modular_terminal.script.lua:1219-1269`) is what
+	--- knows that: adding one at `coordJ = 0` also writes `coordJ = 1`, and
+	--- removing either one removes both. Without it the engine does the plain
+	--- thing - set or clear the one slot the player clicked - and the lower
+	--- level builds half platforms that the player cannot clear properly. Our
+	--- own seeding already wrote both halves, so placement looked right and
+	--- only *editing* was wrong, which is why it was easy to miss.
+	---
+	--- Rail declares no `preProcessFn` at all, so for rail slots - and for our
+	--- supports - the plain assignment below *is* the stock behaviour. Rail's
+	--- paired slots are handled by the engine through `result.dependentSlots`
+	--- instead, which the merge already carries through.
+	---
+	--- The change has to be routed, not just forwarded: street's version calls
+	--- its own `DemangleId` on `change.slotId`, so handing it a rail slot id
+	--- would decode to an arbitrary `(coordI, coordJ)` and could write a rail
+	--- module into a street slot.
+	preProcessFn = function(captureParams, params, change)
+		params = params or {}
+		params.modules = params.modules or {}
+
+		local before = countModules(params)
+
+		local entry = change.module
+		if not change.added then
+			entry = params.modules[change.slotId]
+		end
+
+		-- Clearing a slot that is already empty: nothing to route and nothing
+		-- to classify, so do not make `familyOf` guess at a nil.
+		if entry == nil then
+			params.modules[change.slotId] = nil
+			logChange("plain", params, change, "empty-slot", before)
+			return params
+		end
+
+		local fam = familyOf(change.slotId, entry)
+
+		if fam == "street" then
+			local fn = resolveFn(STREET_SCRIPT .. "@preProcessFn",
+				STREET_SCRIPT .. "@updateFn")
+			if fn ~= nil then
+				-- The whole param table, not just the street share: street's
+				-- version only ever touches ids it mangles itself, and it has
+				-- to write the paired half into the map we hand back.
+				local ok, out = pcall(fn, {}, params, change)
+				if ok and out ~= nil then
+					logChange("street", out, change, fam, before)
+					return out
+				end
+				log.warning(LOG .. "the street preProcessFn failed ("
+					.. tostring(out) .. ") - falling back to a plain"
+					.. " single-slot edit, which will leave half platforms")
+			end
+		end
+
+		if change.added then
+			params.modules[change.slotId] = change.module
+		else
+			params.modules[change.slotId] = nil
+		end
+		logChange("plain", params, change, fam, before)
+		return params
+	end,
+
+
+	--- Does one of the build tools act on this construction?
+	---
+	--- Rail's answer (`modular_station.script.lua:343-349`) is the one we want:
+	--- yes for a track street template, yes for the catenary tool, no for a
+	--- road one. The street family's answer is only about tram track, which
+	--- this construction does not offer (`tramTrack` is pinned to 1), so there
+	--- is nothing to combine.
+	isAffectedByToolFn = function(captureParams, params, conConfigAdd, conConfigRemove)
+		local fn = resolveFn(RAIL_SCRIPT .. "@isAffectedByToolFn",
+			RAIL_SCRIPT .. "@updateFn")
+		if fn == nil then
+			return false
+		end
+		local ok, out = pcall(fn, {}, params, conConfigAdd, conConfigRemove)
+		if ok then
+			return out
+		end
+		log.warning(LOG .. "the rail isAffectedByToolFn failed: " .. tostring(out))
+		return false
+	end,
+
+	--- The track-upgrade and catenary tools, on the elevated level.
+	---
+	--- Without this the elevated track is whatever the seeding chose and stays
+	--- that way forever: there is no construction param for track type, and the
+	--- track-type and catenary choices on a stock modular station are made
+	--- *after* placement, by dragging the upgrade tool over it. So a
+	--- multi-layer station could never be electrified, which quietly rules out
+	--- every electric locomotive.
+	---
+	--- Rail's `upgradeFn` does the real work - it rewrites the module names
+	--- along the track row, following `metadata.catenaryAdd` /
+	--- `catenaryRemove` for the catenary tool and
+	--- `"::/trainstation_" .. resName:gsub("::", "__")` for a track type. That
+	--- second form is exactly the `::/trainstation___/...` name our seeding
+	--- uses, so the two agree.
+	---
+	--- Gated on the slot being rail's. `SwapModule` sets `.name` on whatever it
+	--- finds at the id it is given without checking what it is, so letting a
+	--- street slot through would turn a bus platform into a track module.
+	upgradeFn = function(captureParams, params, slotId, constructionConfig)
+		params = params or {}
+		local entry = (params.modules or {})[slotId]
+		-- An empty slot, which the tool may well drag across. Rail's own
+		-- version returns early on this too; the point of checking here is to
+		-- keep `familyOf` from reporting an unclassifiable nil.
+		if entry == nil then
+			return params
+		end
+		if familyOf(slotId, entry) ~= "rail" then
+			return params
+		end
+		local fn = resolveFn(RAIL_SCRIPT .. "@upgradeFn",
+			RAIL_SCRIPT .. "@updateFn")
+		if fn == nil then
+			return params
+		end
+		local ok, out = pcall(fn, {}, params, slotId, constructionConfig)
+		if ok and out ~= nil then
+			return out
+		end
+		log.warning(LOG .. "the rail upgradeFn failed: " .. tostring(out))
+		return params
+	end,
+
 	updateFn = function(captureParams, params)
 		params = params or {}
+		local year = params.year or FALLBACK_YEAR
 
 		local streetFn = resolveFn(STREET_SCRIPT .. "@updateFn",
 			STREET_SCRIPT .. "@createTemplateFn")
@@ -1084,21 +1489,38 @@ return {
 			RAIL_SCRIPT .. "@createTemplateFn")
 		if streetFn == nil or railFn == nil then
 			log.warning(LOG .. "a stock updateFn is unavailable - nothing to build")
-			return {}
+			return emptyResult()
 		end
 
 		local railModules, streetModules = splitModules(params.modules)
+
+		-- Module accounting, per family, on every rebuild.
+		--
+		-- This is here because "construction not possible" is reported by the
+		-- engine with nothing in the log, so the only way to tell a rejected
+		-- *proposal* from a module map that never changed is to watch the
+		-- counts across hovers. A delete preview must show one fewer than the
+		-- rebuild before it; if it does not, the edit is not reaching
+		-- `updateFn` and the fault is in `preProcessFn`, not in the geometry.
+		local nRail, nStreet, nSupport = 0, 0, 0
+		for _k, _v in pairs(railModules) do nRail = nRail + 1 end
+		for _k, _v in pairs(streetModules) do nStreet = nStreet + 1 end
+		for slotId, _v in pairs(params.modules or {}) do
+			if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE then
+				nSupport = nSupport + 1
+			end
+		end
 
 		-- Each family sees only its own modules. Both read very little:
 		-- street wants modules/tramTrack/year, rail wants modules/year.
 		local streetResult = streetFn({}, {
 			modules = streetModules,
 			tramTrack = 1,
-			year = params.year,
+			year = year,
 		})
 		local railResult = railFn({}, {
 			modules = railModules,
-			year = params.year,
+			year = year,
 		})
 
 		local streetHook = streetResult.terminateConstructionHook
@@ -1114,9 +1536,27 @@ return {
 		local result = shareLists(streetResult, railResult)
 
 		-- Must be before the module pass, which the engine runs off `slots`.
-		local supports = addSupportSlots(result, railResult, RAIL_XF, railModules)
+		local supports = addSupportSlots(result, railResult, RAIL_XF, railModules,
+			params.modules)
+
+		-- Run-once guard. Everything in the hook is a **mutation** of tables the
+		-- engine already holds - the rail level is lifted in place - so a second
+		-- invocation would not redo the work, it would lift an already-lifted
+		-- level to +24 and renumber tags on top of themselves. The engine calls
+		-- the hook once per `updateFn`, so this never fires today; it is here
+		-- because the failure mode is "the upper deck is at the wrong height
+		-- and nothing in the log says why", which is expensive to diagnose.
+		local hookRan = false
 
 		result.terminateConstructionHook = function(...)
+			if hookRan then
+				log.warning(LOG .. "terminateConstructionHook called twice for"
+					.. " one updateFn - ignoring the second call. The result is"
+					.. " mutated in place, so re-running it would double the lift.")
+				return
+			end
+			hookRan = true
+
 			-- Each family's hook closes over its own result table, but those
 			-- tables now point at the same lists, so both assemble into one
 			-- place and whichever runs second sees the other's work.
@@ -1133,9 +1573,17 @@ return {
 			for _i, sub in ipairs(result.subconstructions or {}) do
 				if sub.station then stations = stations + 1 end
 			end
-			log.message(LOG .. "built: " .. tostring(supports) .. " support slots, "
+			local tags = {}
+			for _i, sub in ipairs(result.subconstructions or {}) do
+				tags[#tags + 1] = tostring(sub.tag)
+			end
+			log.message(LOG .. "built: modules rail=" .. tostring(nRail)
+				.. " street=" .. tostring(nStreet)
+				.. " support=" .. tostring(nSupport) .. "; "
+				.. tostring(supports) .. " support slots, "
 				.. tostring(#(result.subconstructions or {}))
-				.. " subconstructions, " .. tostring(stations) .. " stations, "
+				.. " subconstructions (tags " .. table.concat(tags, ",") .. "), "
+				.. tostring(stations) .. " stations, "
 				.. tostring(#(result.slots or {})) .. " slots, "
 				.. tostring(#(result.edgeLists or {})) .. " edge lists, rail at +"
 				.. tostring(PITCH))

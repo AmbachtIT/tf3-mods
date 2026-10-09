@@ -10,35 +10,53 @@ transport family per level, and the two levels stay **two separate stations**,
 which matches in-game practice and lets the player inspect and name each one.
 **Level -1 is parked**; its findings are in `NOTES.md` under "Parked: level -1".
 
-Status: **v0.1 works in-game.** A 160 m rail platform on a stone viaduct at
-+12 m over a bus platform at grade, as two separate stations. Track connects to
-the upper level, road to the lower, rail modules can be added to the upper
-level, the terrain is undisturbed, and it survives a save/reload.
+Status: **v0.1 works in-game.** A 160 m rail platform at +12 m over a bus
+platform at grade, as two separate stations. Track connects to the upper level,
+road to the lower, both levels are editable with the game's own modules and
+tools, the terrain is undisturbed, and it survives a save/reload.
 
 **Both levels are the game's own stock stations, delegated.** Level 0 is the
 modular street station, unchanged and at grade; level +1 is the modular rail
 station, turned a quarter turn so the tracks cross the bus exit rather than
-running alongside it, and lifted 12 m onto a stone viaduct. Both are therefore
-editable with the game's own modules, and the lower level brings the bus
+running alongside it, and lifted 12 m. The lower level therefore brings the bus
 station's real layout, entrance and snap-to-the-road-end behaviour.
 
-How two stock families share one construction is written up in the root
-[NOTES.md](../NOTES.md), "Hosting two stock families in one construction" - it is
-the reusable part of this mod.
+Both levels are editable with the game's own modules **and** its own tools,
+because the construction delegates each family's whole script surface rather
+than just `updateFn`: adding a bus platform adds both of its tiles, and the
+catenary tool electrifies the elevated track.
+
+Two write-ups in the root [NOTES.md](../NOTES.md) are the reusable parts of this
+mod: "Hosting two stock families in one construction", and "Delegating a family
+means delegating its whole script surface" - the second being the one that is
+easy to miss, because a missing `preProcessScript` leaves placement looking
+perfect and breaks only editing.
 
 Accepted limitations for now:
 
+- **the elevated deck has no structure under it.** The track used to sit on a
+  stone viaduct via `edgeType = "BRIDGE"`, but the engine generates a bridge's
+  pillars and abutments from the edge alone and so drove them straight through
+  the bus station below. Nothing automatic can know what the player means to
+  put under the deck, so the deck is bare and structure is placed, not
+  generated - see `NOTES.md`, "The elevated track carries no bridge". Support
+  modules cover it for now; proper art is the real answer;
 - a track drawn from the elevated level down to grade is built as an embankment
   rather than a viaduct (`NOTES.md`, "The player's connecting edge earthworks, in
   both directions");
 - the upper station is labelled a tram station, because of how carrier names are
   chosen from a station group's carriers;
-- **supports** are player-placed modules that work under platform tiles but are
-  misaligned under station buildings - cause known, fix written up in `PLAN.md`
-  Phase 7;
+- **supports** are player-placed modules that work under platform and track
+  tiles but are misaligned under station buildings. The cause is known and written up in
+  `PLAN.md` Phase 7 - which also now records that the fix has to be keyed on the
+  *module*, not the slot type, because `rail_building_size2` hosts buildings 17,
+  23 and 38 m deep;
 - stock station buildings have ground-level entrances and read as street level
   however they are supported. Stairs placed at a platform end look right and
-  carry catchment, so they are the better default until there is custom art.
+  carry catchment, so they are the better default until there is custom art;
+- no construction parameters at all. The level layout is fixed at placement by
+  design, and everything else - track type, catenary, how many platforms on
+  either level - is chosen afterwards with the game's own modules and tools.
 
 ```
 .\deploy.ps1            # staging area; restart the game afterwards
@@ -50,6 +68,9 @@ buildings menu, passenger filter - the level at grade decides which tab a varian
 lives in and what it snaps to, so the mirror variant (road over rail) will sit in
 the rail tab.
 
+- [TESTS.md](TESTS.md) - the beta test protocol: what to run before publishing,
+  what each diagnostic in the log means, and what is frozen once the mod is
+  public.
 - [NOTES.md](NOTES.md) - what the install says and what the probes proved: the
   terrain mechanisms, the measured vertical budget, where the 12 m pitch comes
   from, why a rail platform will not go in a bus station, how editing works, and
@@ -61,12 +82,14 @@ the rail tab.
 
 ## What v0.1 does and does not do
 
-Does: delegates the stock rail station to level +1 and lifts all of its output
-12 m in one pass at the end of a wrapped `terminateConstructionHook`; converts
-its edges to bridges; drops its terrain alignment and ground faces; adds a
-single bus platform with its own station record at grade, with road stubs and a
-pedestrian lane that climbs to the upper level.
+Does: hosts the stock **street** station at grade and the stock **rail** station
+at level +1 in one construction, sharing one result table between them; lifts
+all of the rail family's output 12 m in one pass at the end of a wrapped
+`terminateConstructionHook`, with a quarter turn so the tracks cross the bus
+exit; drops its terrain alignment and ground faces; links the two levels'
+pedestrian networks with one lane; and routes each
+of `preProcessFn`, `upgradeFn` and `isAffectedByToolFn` to whichever family owns
+the slot being acted on.
 
-Does not, yet: modular editing of the lower level (it is one fixed platform),
-any choice of transport type per level, road-over-rail as well as rail-over-road,
-cargo, or anything below grade.
+Does not, yet: any choice of transport type per level, road-over-rail as well as
+rail-over-road, cargo, or anything below grade.

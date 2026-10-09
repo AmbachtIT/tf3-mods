@@ -137,10 +137,54 @@ transforms, and those models are a mix of module-placed and host-placed. Shiftin
 the slots early would split the station across two heights and leave the lane
 list straddling both.
 
+**Hardened for the beta, 2026-10-09.** Both levels are delegated and the
+construction now answers for the whole of each family's script surface, not just
+`updateFn` - see root `NOTES.md`, "Delegating a family means delegating its whole
+script surface". What changed:
+
+- `preProcessScript`, routed to street's `preProcessFn`. Without it a street
+  passenger platform was one slot instead of two, so **editing** the lower level
+  produced half platforms even though placement looked right.
+- `upgradeScript` + `isAffectedByToolScript`, routed to rail's. Without them the
+  elevated track could never be electrified or changed to another track type,
+  because the modular rail station has no param for either - the upgrade tool is
+  the only route.
+- The dead `mlBridge` construction param removed. It was visible in the
+  placement toolbar (`desc.params` is concatenated with `template.data.params`)
+  and read by nobody.
+- Module routing by slot id for our own slots rather than by the name
+  `ml_support`, so a third-party support module is not mistaken for a rail one.
+  Anything unclassifiable is now logged.
+- Subconstruction tags from a per-family base (street 1.., rail 101..) rather
+  than from the position in the concatenated list, so the rail station's tag no
+  longer depends on how many subconstructions the street level produced.
+- A run-once guard on the hook, a grade-anchored empty result when a stock
+  `updateFn` cannot be resolved, a `year` fallback, and the pedestrian link now
+  refuses to attach to a person node that coincides with a vehicle node - the
+  one thing in this mod that can hard-crash the game.
+- **The elevated track's `snapNodes` are no longer converted to `freeNodes`.**
+  That conversion was a leftover from the terrain hunt and it broke module
+  editing the moment a track was connected: every module except the one at the
+  connection refused with "construction not possible". Reverting it fixed that
+  and changed nothing about the terrain. Root `NOTES.md`, "A station's
+  `snapNodes` are load-bearing"; there is now a warning if a TRACK edge list
+  ever ends up with edges and no snap nodes again.
+- Bare-relative resource ids are resolved against the owning family's
+  directory. Street uses 42 of them and rail none, so the bus station's side
+  building had been a missing model on every rebuild since the street level was
+  delegated.
+- **The bridge under the elevated track is gone.** `edgeType` stays `NORMAL`.
+  The stone viaduct rendered correctly but the engine generates its pillars and
+  abutments from the edge alone, so they drove through the bus station below.
+  Structure on a multi-level station has to be placed, not generated - the same
+  conclusion Phase 7 reached for supports. Track tiles consequently get support
+  slots now. See `NOTES.md`, "The elevated track carries no bridge".
+
+See [TESTS.md](TESTS.md) for what to run before publishing.
+
 Still to do:
 
-1. **Make level 0 modular** by delegating the street station the same way,
-   instead of the hand-built platform. This is the next step.
+1. ~~Make level 0 modular~~ - done.
 2. Per-level slot id namespacing, needed once two families are delegated. Not
    needed in v0.1 with only one. In practice the two families' id spaces already
    differ (rail 6.4-10.8e6, street ~20e6) but not by construction, so namespace
@@ -173,6 +217,37 @@ cause is now known, so resuming should be mechanical.
 - The footprint figures themselves are right, confirmed by the in-game
   diagnostic: `passenger_platform 5.0x7.8 x5`,
   `rail_building_size2 20.0x6.7 x3`, `rail_building_size3 40.0x7.4 x5`.
+
+### First: the slot type is the wrong key, so the table below cannot work
+
+Found 2026-10-09 while reviewing for the beta, by listing every rail building
+module's `type` against the `extend` in its `updateScript.params.config`.
+**A slot type does not determine the footprint of what goes in it:**
+
+| slot type | model `extend` of the modules that declare it |
+| --- | --- |
+| `rail_building_size1` | `6, -6, 0, -17` |
+| `rail_building_size2` | `11, -11, 0, -17` *and* `11, -11, 0, -23` *and* `11, -11, 0, -38` |
+| `rail_building_size3` | `21, -21, 0, -38` |
+
+`main_building_1` and `main_building_2` are both `rail_building_size2`, and they
+are 17 m and 23 m deep; `side_building_3_cargo` is also `rail_building_size2`
+and is 38 m deep. So any `FOOTPRINTS` table keyed on slot type - the one in the
+code today, and the corrected one below - is wrong by up to a factor of two in
+depth for whatever it did not happen to be fitted to.
+
+The key has to be the **module**, not the slot. `addSupportSlots` already has
+it: `modules[slot.id]` is the module entry, carrying `.name` (confirmed - rail's
+own code does `mod.name:match(...)` at `modular_station.script.lua:579`). So
+either key the table by name pattern - the extents are uniform across eras, so
+`main_building_1` / `_2` / `_3` and `side_building_1` / `_2` / `_3` is six rows -
+or read `extend` out of the module desc at runtime if
+`api.res.moduleRep.get(...).updateScript.params` turns out to be reachable
+(rail reads `.metadata` off the same desc, so the desc itself is).
+
+`extend` is `{ xMax, xMin, yMax, yMin, ... }` in model space, which is the same
+space as the bounding boxes below, so the quarter-turn correction still applies
+on top of it.
 
 ### The bug, and the fix
 

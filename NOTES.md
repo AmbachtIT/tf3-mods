@@ -409,9 +409,67 @@ awk 'NR>=<hook start line>' family.script.lua | grep -o "result\.[a-zA-Z_]*" | s
 Anything in both lists is a decision you have to make deliberately. That sweep
 found `poolConfig` in one go after three fields had each cost a test round.
 
+### Delegating a family means delegating its whole script surface
+
+`updateFn` and `createTemplateFn` are the two obvious ones and they are not the
+whole job. A `.con.lua` declares up to five script refs, and a construction that
+hosts a stock family has to answer for every one the family answers for -
+otherwise the parts of the station those scripts own quietly stop working, with
+nothing in the log.
+
+| script | rail | street | what stops working without it |
+| --- | --- | --- | --- |
+| `createTemplateScript` | yes | yes | the initial module map |
+| `updateScript` | yes | yes | everything |
+| `preProcessScript` | **no** | **yes** | module add/remove bookkeeping |
+| `upgradeScript` | **yes** | yes | the upgrade tools |
+| `isAffectedByToolScript` | **yes** | yes | which tools target the construction |
+
+The two that bite:
+
+- **`preProcessFn` is where a family's "one click, several slots" rules live.**
+  A street passenger platform is *two* slots: street's `preProcessFn`
+  (`modular_terminal.script.lua:1219-1269`) writes `coordJ = 1` when the player
+  adds at `coordJ = 0`, and removes both when either goes. With no
+  `preProcessScript` the engine does the plain thing - set or clear the one slot
+  that was clicked - so seeding looks right and only *editing* is broken, which
+  is a bad failure to find late. Rail declares none and instead uses
+  `result.dependentSlots`, which the engine honours by itself.
+- **`upgradeFn` is the only post-placement route to track type and catenary.**
+  The modular rail station has no construction param for either; both are chosen
+  by dragging the upgrade tool over the built station, and
+  `modular_station.script.lua:351-427` is what turns that into module-name
+  rewrites along the track row. A delegating construction without an
+  `upgradeScript` is therefore stuck with whatever its seeding chose - in
+  particular it can never be electrified.
+
+Both have to be **routed, not forwarded**, for the same reason the module map is
+split: street's `preProcessFn` calls its own `DemangleId` on `change.slotId`, and
+rail's `SwapModule` assigns `.name` to whatever it finds at the id it is given
+without checking what it is. Hand either one the other family's slot id and it
+does something confident and wrong.
+
+### Top-level `desc.params` are not inert on a template-based construction
+
+Worth stating because the opposite is easy to infer from the
+`postConstructionModifiable` finding below. There are **two different param
+readers**:
+
+- the **placement toolbar** concatenates `desc.params` with
+  `template.data.params` (`gui/construction/construction_react_util.tl:1057-1067`)
+  and shows the lot;
+- the **post-construction panel** looks only at `desc.params`
+  (`entity_window_util.tl:1893`), which is why no stock station can be edited
+  after building.
+
+So a top-level param on a construction that also has `constructionTemplates`
+*does* appear at placement time. A declared-but-unread param is a control the
+player can move to no effect.
+
 ### What is genuinely reusable
 
 - The three-party model and the decision table above.
+- Delegating the family's whole script surface, not just `updateFn`.
 - One family at grade, untransformed, owning the construction level. Giving the
   *transformed* family the construction level would mean transforming terrain
   alignment faces and ground textures too.
@@ -891,6 +949,44 @@ Node indices in `snapNodes` / `freeNodes` are **0-based**:
 (`street_util_serialized.tl:70-76`), and `trainstationutil.lua:73` uses
 `nedges + 0` for its first node. A 2-point curve yields nodes `0` and `1`;
 listing both in `freeNodes` makes both ends connectable - confirmed.
+
+### A station's `snapNodes` are load-bearing - do not convert them to `freeNodes`
+
+**Confirmed 2026-10-09**, and it cost a debugging round. A mod lifting the
+modular rail station turned its track edges' `snapNodes` into `freeNodes`,
+reasoning that a snap node is where the engine brings the ground up to meet the
+edge. The consequence had nothing to do with terrain:
+
+> Place the station - modules delete fine. Connect **a single piece of track**.
+> Now only the module at the connection can be deleted; every other module
+> gives "construction not possible" on hover.
+
+Verified against a stock modular rail station, which allows the deletion, so
+this was the mod's doing and not engine behaviour.
+
+The mechanism is in `trainstationutil.lua`. A track module contributes 12 edges,
+and the util marks an end node **only where there is no adjacent track module**
+(`:80-87`) while separately recording all twelve of that module's node indices
+in `edgeLists[n].tag2nodes[tag]` (`:277-291`). `tag2nodes` is tag-keyed, so it
+is how a rebuild re-identifies nodes and carries an external connection across
+it. Emptying `snapNodes` discards the engine's own record of "this is where I
+join the world" while leaving `tag2nodes` asserting otherwise, and the engine
+then refuses any rebuild that would have to re-stitch the connection.
+
+Reverting the conversion fixed it **and left the terrain alone**, so the
+conversion bought nothing in the first place.
+
+Two lessons, the second more useful than the first:
+
+- **`snapNodes` is not a terrain control.** The terrain controls are
+  `terrainAlignmentLists` (which must be a grade anchor, never empty),
+  `groundFaces` and `EdgeList.alignTerrain`. Reaching for anything else to fix
+  terrain means guessing.
+- **A fix adopted on an untested theory outlives the theory.** This conversion
+  was added while hunting the terrain bug, kept when the real cause turned out
+  to be the empty `terrainAlignmentLists`, and only showed its own bill months
+  later in a completely unrelated feature. When a bisect finds the real cause,
+  go back and revert the things that were tried and left in.
 
 **`EdgeList.alignTerrain` is the explicit "do not deform terrain" control**
 (`construction_util_serialized.d.tl:153`). The airfield sets it `false` on its
