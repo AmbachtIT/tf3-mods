@@ -1046,6 +1046,108 @@ local function supportCell(result, slotId)
 end
 
 --------------------------------------------------------------------------------
+-- the track-type and catenary tools
+--------------------------------------------------------------------------------
+
+--- These are **reimplemented, not delegated**, and that is the whole point.
+---
+--- Delegating them did not work: `util.useFn` could not resolve
+--- `modular_station.script@isAffectedByToolFn` on whatever thread the build
+--- tools run on - 5542 failures in one session - so our wrapper returned
+--- `false`, the engine never offered the station to either tool, and neither
+--- electrification nor a track-type change did anything. Resolving a sibling
+--- first did not help, which is as far as the documented workaround goes (root
+--- NOTES.md, "`util.useFn` is per-thread, and not equally willing on every
+--- thread").
+---
+--- The root `NOTES.md` rule already said not to do this: *"a delegated stock
+--- call is fine for geometry, where a failure degrades to nothing drawn and is
+--- obvious. It is a bad idea for anything that decides the shape of the
+--- result."* These decide which modules exist, so they belong here. They use
+--- only `api.res.*`, which the stock station uses in the same two functions, so
+--- there is nothing left to resolve.
+
+--- The module name for a track street template.
+---
+--- Mirrors `ResNameToModuleName` (`modular_station.script.lua:359-363`): the
+--- engine generates one module per track street template under this prefix, and
+--- `::` in the resource name becomes `__`. An absolute `::/infrastructure/...`
+--- therefore becomes `::/trainstation___/infrastructure/...` - the three
+--- underscores our own seeding uses, which is how the two agree.
+local function trackModuleName(resName)
+	return "::/trainstation_" .. (tostring(resName):gsub("::", "__"))
+end
+
+--- A copy deep enough to retarget module names without touching the original.
+---
+--- The stock version is `table_util.copy(params)`, a fully recursive deep copy.
+--- That is more than is needed and a lot more than is cheap - a module entry
+--- carries its whole desc, `generatedData` and all. Only `params`, `modules`
+--- and the entries whose `name` is rewritten have to be fresh; everything
+--- inside an entry can stay shared.
+local function copyParamsShallowModules(params)
+	local out = {}
+	for k, v in pairs(params) do out[k] = v end
+	out.modules = {}
+	for slotId, entry in pairs(params.modules or {}) do
+		if type(entry) == "table" then
+			local e = {}
+			for k, v in pairs(entry) do e[k] = v end
+			out.modules[slotId] = e
+		else
+			out.modules[slotId] = entry
+		end
+	end
+	return out
+end
+
+--- Read the original, write the copy - exactly as the stock version does, which
+--- is what makes the two row walks below terminate sensibly.
+local function swapModule(params, copy, slotId, to)
+	local entry = params.modules[slotId]
+	if entry ~= nil and entry.name ~= to then
+		copy.modules[slotId].name = to
+		return true
+	end
+	return false
+end
+
+--- Walk a track row in both directions from the slot the tool hit.
+---
+--- A track row is `base + 1000 * coordI + 10 * coordJ`, so +-10 steps along it.
+--- The walk stops at the first slot that is empty or already has the target
+--- name, which is stock behaviour (`SwapRow`, `:365-377`).
+local function swapRow(params, copy, slotId, to)
+	local id = slotId
+	while swapModule(params, copy, id, to) do id = id + 10 end
+	id = slotId
+	while swapModule(params, copy, id, to) do id = id - 10 end
+end
+
+--- `catenaryAdd` / `catenaryRemove` name the module to swap to. Only the track
+--- modules declare them, so this is self-limiting.
+local function swapCatenary(params, copy, slotId, field)
+	local entry = params.modules[slotId]
+	if entry == nil or entry.name == nil then
+		return false
+	end
+	local desc = api.res.moduleRep.get(api.res.moduleRep.find(entry.name))
+	local to = desc and desc.metadata and desc.metadata[field] or nil
+	if to == nil then
+		return false
+	end
+	copy.modules[slotId].name = to
+	return true
+end
+
+local function swapRowCatenary(params, copy, slotId, field)
+	local id = slotId
+	while swapCatenary(params, copy, id, field) do id = id + 10 end
+	id = slotId
+	while swapCatenary(params, copy, id, field) do id = id - 10 end
+end
+
+--------------------------------------------------------------------------------
 -- vertical circulation between the levels
 --------------------------------------------------------------------------------
 
@@ -1246,9 +1348,29 @@ local function finish(result, streetResult, railResult)
 					position = { 0.0, 0.0, 0.0 },
 					radius = 175,
 				}
+				-- Two quite different causes, and the message used to name only
+				-- the second, which sent a debugging session the wrong way:
+				--
+				--  1. the station legitimately has no catchment-bearing module
+				--     right now, because the player removed the last building.
+				--     Seen in a real session after deleting a platform, which
+				--     moves the building slot ids - they are derived from
+				--     `minS[j]`, the lowest occupied column in each row
+				--     (`modular_station.script.lua:688`) - and so orphans the
+				--     building module that was sitting in one. Stock behaviour,
+				--     and the fallback is doing exactly its job;
+				--  2. `MAIN_BUILDING_SLOT` is not landing in a real slot, which
+				--     would mean the seeding is wrong - most likely after a
+				--     game update.
+				--
+				-- They are told apart by whether the `support footprints:` line
+				-- for the same rebuild still mentions a `rail_building_*` slot.
 				log.warning(LOG .. "a station had no catchment of its own -"
-					.. " falling back to a default. For the rail level that"
-					.. " means MAIN_BUILDING_SLOT is not landing in a real slot.")
+					.. " falling back to a default. Either no"
+					.. " catchment-bearing module is placed (fine - check"
+					.. " whether this rebuild's support footprints still list a"
+					.. " rail_building_* slot), or MAIN_BUILDING_SLOT has"
+					.. " stopped landing in a real slot (not fine).")
 			end
 
 			station.pool = station.pool or { edges = {} }
@@ -1416,23 +1538,22 @@ return {
 
 	--- Does one of the build tools act on this construction?
 	---
-	--- Rail's answer (`modular_station.script.lua:343-349`) is the one we want:
-	--- yes for a track street template, yes for the catenary tool, no for a
-	--- road one. The street family's answer is only about tram track, which
-	--- this construction does not offer (`tramTrack` is pinned to 1), so there
-	--- is nothing to combine.
+	--- Same answer as the stock rail station
+	--- (`modular_station.script.lua:343-349`): yes for a **track** street
+	--- template, no for a road one, yes for everything else - which is what
+	--- lets the catenary tool through. The street family's answer is only about
+	--- tram track, which this construction does not offer, so there is nothing
+	--- to combine.
+	---
+	--- `roadType == 0` is TRACK; the comparison is the stock one.
 	isAffectedByToolFn = function(captureParams, params, conConfigAdd, conConfigRemove)
-		local fn = resolveFn(RAIL_SCRIPT .. "@isAffectedByToolFn",
-			RAIL_SCRIPT .. "@updateFn")
-		if fn == nil then
-			return false
+		local template = conConfigAdd and conConfigAdd.streetTemplate or nil
+		if template then
+			local rep = api.res.streetTemplateRep
+			local desc = rep.get(rep.find(template))
+			return desc ~= nil and desc.roadType == 0
 		end
-		local ok, out = pcall(fn, {}, params, conConfigAdd, conConfigRemove)
-		if ok then
-			return out
-		end
-		log.warning(LOG .. "the rail isAffectedByToolFn failed: " .. tostring(out))
-		return false
+		return true
 	end,
 
 	--- The track-upgrade and catenary tools, on the elevated level.
@@ -1444,39 +1565,45 @@ return {
 	--- multi-layer station could never be electrified, which quietly rules out
 	--- every electric locomotive.
 	---
-	--- Rail's `upgradeFn` does the real work - it rewrites the module names
-	--- along the track row, following `metadata.catenaryAdd` /
-	--- `catenaryRemove` for the catenary tool and
-	--- `"::/trainstation_" .. resName:gsub("::", "__")` for a track type. That
-	--- second form is exactly the `::/trainstation___/...` name our seeding
-	--- uses, so the two agree.
+	--- The work is rewriting module names along the track row: the generated
+	--- `::/trainstation___/...` module for a track type, or whatever
+	--- `metadata.catenaryAdd` / `catenaryRemove` names for the catenary tool.
 	---
-	--- Gated on the slot being rail's. `SwapModule` sets `.name` on whatever it
-	--- finds at the id it is given without checking what it is, so letting a
-	--- street slot through would turn a bus platform into a track module.
+	--- Gated **twice**, and the second gate is stricter than stock's. Stock
+	--- `SwapModule` assigns `.name` to whatever it finds at the slot id it is
+	--- handed, without checking what that module is, so a street slot getting
+	--- through would turn a bus platform into a track module. On top of that we
+	--- require `metadata.track`, which is the field rail's own `updateFn` uses
+	--- to recognise a track module - so a platform or a building can never be
+	--- renamed into a track by a mis-aimed tool.
 	upgradeFn = function(captureParams, params, slotId, constructionConfig)
 		params = params or {}
-		local entry = (params.modules or {})[slotId]
-		-- An empty slot, which the tool may well drag across. Rail's own
-		-- version returns early on this too; the point of checking here is to
-		-- keep `familyOf` from reporting an unclassifiable nil.
-		if entry == nil then
+		params.modules = params.modules or {}
+
+		-- An empty slot, which the tool may well drag across.
+		local entry = params.modules[slotId]
+		if entry == nil or type(entry) ~= "table" then
 			return params
 		end
 		if familyOf(slotId, entry) ~= "rail" then
 			return params
 		end
-		local fn = resolveFn(RAIL_SCRIPT .. "@upgradeFn",
-			RAIL_SCRIPT .. "@updateFn")
-		if fn == nil then
+		if entry.metadata == nil or not entry.metadata.track then
 			return params
 		end
-		local ok, out = pcall(fn, {}, params, slotId, constructionConfig)
-		if ok and out ~= nil then
-			return out
+
+		local copy = copyParamsShallowModules(params)
+		if constructionConfig.streetTemplate then
+			swapRow(params, copy, slotId,
+				trackModuleName(constructionConfig.streetTemplate))
+		elseif constructionConfig.catenary then
+			swapRowCatenary(params, copy, slotId,
+				constructionConfig.catenary == 2 and "catenaryAdd"
+					or "catenaryRemove")
+		else
+			return params
 		end
-		log.warning(LOG .. "the rail upgradeFn failed: " .. tostring(out))
-		return params
+		return copy
 	end,
 
 	updateFn = function(captureParams, params)

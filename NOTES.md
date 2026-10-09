@@ -185,6 +185,30 @@ Worth keeping a fallback anyway - caching the last successful result of an
 expensive delegated call, for instance - because a resource script has no way to
 force a load.
 
+**And sometimes the sibling retry is not enough.** Confirmed 2026-10-09:
+`modular_station.script@isAffectedByToolFn` could **not** be resolved on
+whatever thread the build tools run on - 5542 failures in one session, with the
+sibling retry on `@updateFn` failing too, while the same ref resolves fine on
+the threads that build geometry. So the documented workaround has a floor, and a
+feature that depends on resolution happening is a feature that sometimes does
+not exist.
+
+The symptom was maximally quiet: our `isAffectedByToolFn` fell back to
+`return false`, the engine concluded the construction was not affected by the
+tool, and the electrification and track-type tools simply did nothing on it -
+no error, no refusal, no visible difference from "this station does not support
+that". The log said so 5542 times and nothing else did.
+
+Which makes the rule in "Do not let a delegated call decide what the player
+sees" sharper than it was first written. It is not only about *inconsistency*
+between threads; it is that some functions cannot be delegated at all from some
+contexts. **Reimplement anything on the tool and editing paths** -
+`isAffectedByToolFn`, `upgradeFn`, `preProcessFn` - rather than delegating it.
+They are short, they decide the shape of the result, and they usually need
+nothing but `api.res.*`, which is available everywhere the stock scripts use it.
+Keep delegation for `updateFn`, where a failure draws nothing and is impossible
+to miss.
+
 
 ## The stock hook shares model tables between `result` and the subconstruction
 
@@ -479,6 +503,35 @@ player can move to no effect.
   duplicate crashes the game outright.
 - Deciding per field, and writing down why - the table above is the deliverable,
   not the code.
+
+
+## Several `station` records in one construction join one StationGroup
+
+**Confirmed in-game 2026-10-09** with `multi-layer-stations`, whose two levels
+are two separate `station` records in one construction - a bus station at grade
+and a train station at +12 m. Passengers use both and **transfer between them**,
+with no terminal merging, no lane-index rebasing and no code at all. The engine
+groups the records.
+
+This is worth knowing before designing any multi-station construction, because
+the alternative design - one `station` record with terminals of two carriers -
+was tried first, does **not** work, and is the obvious thing to reach for. A
+single station entity carries one carrier; a *StationGroup* is what spans
+several, which is why `getCarriers` is a group-level call.
+
+Two consequences come with it, and both are engine behaviour rather than
+choices:
+
+- **A StationGroup has one name.** The stations in it cannot be named
+  individually. Free interchange and a single name are the same fact seen from
+  two sides.
+- **The entity window's label is the group's, and the last carrier wins.**
+  `getSubconstructionDescriptionAndSortKey`
+  (`gui/entity_window/make_entity_window.tl:46-101`) reads
+  `getCarriers(getStationGroup(entity), -1, -1)` and walks the list assigning
+  `_("Road Station")` / `_("Train Station")` / `_("Tram Station")` / ... with
+  **no `break`**. So every station in the group shows the same label, and which
+  one depends on carrier order, not on which station was clicked.
 
 
 ## Two subconstructions must not share a `tag`

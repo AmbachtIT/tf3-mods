@@ -375,7 +375,65 @@ The field is **absent from the `TerminalDef` record**
 `vehicleNode`, `vehicleEdges`, `personNodes` or `transportModes`. Shipped
 content wins.
 
-### Two stations or one? An open design fork
+### Settled: the two stations **do** join one StationGroup
+
+**Confirmed in-game 2026-10-09.** This was the mod's highest-value open
+question - "does a line stopping on one level let passengers reach the other?" -
+and the answer is yes, for free. Passengers use the bus station, use the train
+station, and transfer between them. No terminal merging, no index rebasing, no
+work at all: each delegated family keeps its own `station` record and the engine
+groups them.
+
+So the "one station, terminals at two heights" branch below is moot, and the
+earlier rejection of it (also below) was arguing about the wrong thing.
+
+**The price is naming, and it is not optional.** A StationGroup has exactly one
+name, so the two levels cannot be named individually - the claim that each level
+would be "separately nameable" was simply wrong and is corrected here. The same
+grouping that gives free interchange is what collapses the two names into one.
+That is a good trade, but it is a trade.
+
+### Why the upper level says "Tram Station"
+
+`getSubconstructionDescriptionAndSortKey`
+(`gui/entity_window/make_entity_window.tl:46-101`) builds the label like this:
+
+```lua
+local stationGroupEntity = api.engine.system.stationGroupSystem.getStationGroup(entity)
+local carriersAndTransportModes = api.engine.system.stationGroupSystem.getCarriers(stationGroupEntity, -1, -1)
+local carriers = carriersAndTransportModes[1]
+local stationName = _("Station")
+for __, carrier in ipairs(carriers) do
+    if carrier == ROAD then stationName = _("Road Station")
+    elseif carrier == RAIL then stationName = _("Train Station")
+    elseif carrier == TRAM then stationName = _("Tram Station")
+    ...
+```
+
+Two things to take from it:
+
+1. **The carriers are the whole _group's_, not the station's**, and there is
+   **no `break`** - so the *last* carrier in the list wins and **both** of our
+   stations get the same label. It is one label for the group, like the name.
+2. Nothing in this mod chooses it. It is a pure function of the group's carrier
+   list.
+
+What is **not** yet explained is why `TRAM` is in that list at all. It should
+not be: both street terminals gate `TRAM` behind
+`constrParams.tramTrack and constrParams.tramTrack > 1`
+(`modular_street_station/modules.script.lua:85-90` and `:486-491`), this
+construction declares no `tramTrack` param, and street's `updateFn` is handed
+`tramTrack = 1`, so `selectTramTrack` returns `"NO"` everywhere. Something else
+is contributing a TRAM carrier.
+
+Worth knowing before chasing it: this is **cosmetic**. The label is a heading in
+the entity window; lines, routing and transfers all work. Next step if it is
+picked up is to read the carrier list directly from a game script -
+`api.engine.system.stationGroupSystem.getCarriers(getStationGroup(e), -1, -1)` -
+rather than reasoning further from the content, since that turns a guess into a
+list.
+
+### Two stations or one? A fork that turned out not to matter
 
 Confirmed in-game: a construction with two `station` records produces **two
 separately selectable stations**, not one grouped station. The train station and
@@ -715,9 +773,10 @@ source - keyed by module name, or read off the module desc at runtime if
 
 ## Open questions
 
-- **Do two station records in one construction join one StationGroup?** Now the
-  most important open question: a two-level station has one station per level,
-  and interchange between them depends on this.
+- ~~Do two station records in one construction join one StationGroup?~~
+  **Answered yes, 2026-10-09** - interchange works and costs nothing. See
+  "Settled: the two stations **do** join one StationGroup". The follow-on
+  question is narrower: why does the group report a `TRAM` carrier?
 - Are the rail and street families' module/host field names really disjoint, so
   one merged result can host both? Reasoned from the scripts, not tested. See
   "Picking a transport type per level".

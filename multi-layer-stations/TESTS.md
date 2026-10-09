@@ -119,9 +119,13 @@ modular rail station.** If stock refuses too it is engine behaviour and the job
 is to document it. That one comparison is worth more than any amount of reading
 the stock scripts.
 
-1. Add a platform tile at each end. The track should extend with it.
-2. Add a roof, then an addon (stairs), then remove them again.
-3. Add a second track and platform alongside.
+1. Add a platform tile at each end, then a track tile at each end. **These are
+   independent modules** - a platform does not extend the track or vice versa,
+   and the rail station offers a `passenger_platform` and a `track` slot at
+   every `(i, j)`. Both have to be extended by hand, and that is stock
+   behaviour.
+2. Add a roof, then an addon (stairs/underpass), then remove them again.
+3. Add a second track and a second platform alongside.
 4. Add a station building. Then **swap it for a different size** - this is the
    case that exercises `rail_building_size2` hosting buildings of two different
    depths.
@@ -280,11 +284,11 @@ Quick, and each one is a thing a player will do in the first hour.
 | test | result | notes |
 | --- | --- | --- |
 | validator | | |
-| T1 place + passengers both levels | | |
-| T2 edit elevated level, unconnected | | |
+| T1 place + passengers both levels | pass 2026-10-09 | both levels carry passengers and **transfer between them** - settles the StationGroup question |
+| T2 edit elevated level, unconnected | pass 2026-10-09 | underpasses, extra tracks and extra platforms all work |
 | T2 edit elevated level, **track connected** | pass 2026-10-09 | was broken by the `snapNodes` conversion; fixed |
-| T3 edit lower level *(new)* | | |
-| T4 upgrade tools *(new)* | | |
+| T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
+| T4 upgrade tools *(new)* | **fail 2026-10-09**, fix deployed | neither catenary nor track type worked: `isAffectedByToolFn` was delegated and would not resolve on the tool thread. Reimplemented; retest |
 | T5 supports | | |
 | T6 pedestrian link *(new)* | | |
 | T7 save / reload / rebuild | | |

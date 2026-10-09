@@ -73,7 +73,11 @@ return {
 		fileName = "::/gui/construction/construction_desc_hud_icons.script@configureStationHudIconsFn",
 		params = { cargo = false },
 	},
-	namePrefix = _("{townName} Multi-layer Station"),
+	-- "Bremen Central", not "Bremen Multi-layer Station". The mod's name has no
+	-- business being in the station's, and a multi-level interchange is the
+	-- kind of station a town calls its central one. Stock uses the same shape -
+	-- the street station is `{townName} Station`.
+	namePrefix = _("{townName} Central"),
 	subConstructionNamePrefix = "{constructionName}",
 	description = {
 		name = _("Multi-layer Station"),

@@ -44,8 +44,15 @@ Accepted limitations for now:
 - a track drawn from the elevated level down to grade is built as an embankment
   rather than a viaduct (`NOTES.md`, "The player's connecting edge earthworks, in
   both directions");
-- the upper station is labelled a tram station, because of how carrier names are
-  chosen from a station group's carriers;
+- **one name for both levels.** The two `station` records join a single
+  StationGroup, which is what gives interchange between the levels for free -
+  and a StationGroup has exactly one name, so the levels cannot be named
+  individually. Same fact, both sides;
+- the entity window labels both levels "Tram Station". The label is the
+  *group's*, picked by last-carrier-wins in
+  `make_entity_window.tl:46-101`, and why the group reports a `TRAM` carrier is
+  not yet explained - `NOTES.md`, "Why the upper level says Tram Station".
+  Cosmetic: lines, routing and transfers are unaffected;
 - **supports** are player-placed modules that work under platform and track
   tiles but are misaligned under station buildings. The cause is known and written up in
   `PLAN.md` Phase 7 - which also now records that the fix has to be keyed on the
