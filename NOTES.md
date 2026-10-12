@@ -473,6 +473,44 @@ rail's `SwapModule` assigns `.name` to whatever it finds at the id it is given
 without checking what it is. Hand either one the other family's slot id and it
 does something confident and wrong.
 
+### A `params.modules` entry is not the same table in every hook
+
+**Confirmed** 2026-10-12, by fixing it. The entry handed to `updateFn` is
+**enriched** - it carries the module's `metadata`, and rail's own `updateFn`
+reads `k.metadata.track` straight off it (`modular_station.script.lua:495`). The
+entry handed to `upgradeFn` is the **stored** one: `name`, and little else.
+
+The tell is in the stock file itself. For the same field, on the same module,
+`upgradeFn` does not read the entry - it resolves the resource
+(`modular_station.script.lua:384`):
+
+```lua
+local moduleDesc = api.res.moduleRep.get(api.res.moduleRep.find(params.modules[slotId].name))
+local metadata = moduleDesc and moduleDesc.metadata or nil
+```
+
+So: **inside `updateFn`, read `entry.metadata`; anywhere else, resolve the
+module desc from `api.res.moduleRep` and read it there.** `api.res.*` is
+available on every thread the stock scripts use it on, which is the same reason
+the tool-path functions have to be reimplemented rather than delegated.
+
+Where this bit: a mod gate of the form
+`if not entry.metadata.track then return params end` in `upgradeFn` refused every
+electrification of a delegated rail level. The field was simply not there, and a
+refusing `upgradeFn` has **no failure mode at all** - the cursor still offers the
+upgrade, the construction still rebuilds, nothing is logged. Worth assuming the
+same asymmetry applies to `preProcessFn` and `isAffectedByToolFn` until one of
+them is checked; `change.module` on a *removal* is already known to arrive as a
+near-empty entry with `name = ""`.
+
+The corroboration that does not need a log, for the catenary case specifically:
+the track module resolves its edge list **by name** through
+`trainstationutil.findOrMakeNewEdgeListNum`, and rail pre-creates only standard
+/ standard_catenary / high_speed / high_speed_catenary
+(`modular_station.script.lua:470-476`). Electrifying a *simple* row therefore has
+to append a new edge list. An edge-list count that does not move means no
+renamed module reached `updateFn`.
+
 ### Top-level `desc.params` are not inert on a template-based construction
 
 Worth stating because the opposite is easy to infer from the
@@ -503,6 +541,40 @@ player can move to no effect.
   duplicate crashes the game outright.
 - Deciding per field, and writing down why - the table above is the deliverable,
   not the code.
+
+
+## A seeded module's geometry is checked against the world at placement
+
+**Confirmed 2026-10-09**, and the asymmetry is the part worth remembering.
+
+A module the **player** adds after placement is only collision-checked against
+the construction, and `SlotConfig.skipCollisionCheck` turns that off. A module
+that the construction **seeds** is different: its geometry exists when the
+engine runs the placement check, so it is tested against the *world*, and
+`skipCollisionCheck` does nothing for that - it governs a slot against the rest
+of the construction, not the construction against what is already on the map.
+
+How it presented, with a seeded module whose footprint reached the construction's
+own `snapPoint`:
+
+- placing the construction in **free space** worked;
+- **snapping it to a road** was refused as a collision, because snapping puts
+  the road exactly at the `snapPoint`, inside the module's footprint;
+- and after a road was connected, that module could not be **replaced** once
+  demolished - re-placing re-runs the check against the road that is now there -
+  while the originally seeded one carried on working, because it predated the
+  road.
+
+Two rules follow:
+
+- **A seeded module must keep its footprint clear of the construction's
+  `snapPoint`**, not merely of its snap *nodes*. For the street station family
+  the snapPoint is the entrance module's, at `transl(0, -15 + 5, 0)` - local
+  y = -10 (`modular_street_station/modules.script.lua:119-122`) - whereas the
+  entrance edge's snap node is at y = -15. They are different points and the
+  nearer one is the one that matters.
+- **"It places fine in free space" is not evidence that placement works.** Free
+  space has nothing to collide with. Snapping to an existing road is the test.
 
 
 ## Several `station` records in one construction join one StationGroup

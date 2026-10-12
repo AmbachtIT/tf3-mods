@@ -38,6 +38,10 @@ local util = require "::/scripts/util.tl"
 local vec3 = require "::/scripts/vec3.tl"
 local transf = require "::/scripts/mat4.tl"
 local laneutil = require "::/scripts/construction/laneutil.lua"
+--- For `getStationPoolCapacities`. Safe from a resource script: it pulls in
+--- only `vec3` and `mat4`, no GUI. (`constructionutil` is heavier - it reaches
+--- for `asset_util` and the street serialisers - and is not needed here.)
+local modulesutil = require "::/scripts/construction/modulesutil.lua"
 
 local LOG = "[multi-layer] "
 
@@ -58,17 +62,37 @@ local STREET_SCRIPT = "::/stations/street/modular_street_station/modular_termina
 --- mod does not own. One default here turns a hard failure into a wrong era.
 local FALLBACK_YEAR = 1990
 
---- Our own slot layer, declared up here because the module classifier below
---- needs it. The reasoning behind player-placed supports is further down, at
---- "holding the elevated level up".
-local SUPPORT_TYPE = "ml_support"
---- Clear of both families: rail ids reach about 11e6, street about 20e6.
---- `slot.id * 10 + k` keeps the mapping stable across rebuilds, which matters
---- because `params.modules` is keyed by it and survives a savegame.
+--- Our own slot layers, declared up here because the module classifier below
+--- needs them. What each one is for is documented where it is built: supports
+--- under "holding the elevated level up", the concourse under "the concourse".
 ---
---- **Frozen at the first public release.** A slot id is a savegame key, so
---- changing this orphans every support a player has placed.
+--- **All of this is frozen at the first public release.** A slot id is a
+--- savegame key and a slot type is the string a third-party module matches on,
+--- so changing either orphans what players have built.
+local SUPPORT_TYPE = "ml_support"
+local CONCOURSE_TYPE = "ml_concourse"
+
+--- The id bases, and the arithmetic that keeps them from colliding - which is
+--- worth writing down, because the first choice of base for the concourse did
+--- collide and it would not have been visible until a player put a support
+--- under the far end of a long station.
+---
+---     supports   600e6 + railSlotId * 10 + cell
+---                rail slot ids reach ~10,817,100 (`passengerPlatformAddonSlotId`
+---                = 10800000, plus 1000 * coordI + 10 * coordJ), so x10 + 9
+---                takes supports up to ~708e6.
+---     concourse  800e6 + streetSlotId with the variant digits cleared
+---                street slot ids are 200000 * (coordJ + 100) + 100 *
+---                (coordI + 100) + variant, so ~21e6 at most: ~821e6.
+---
+--- 800e6 therefore clears the top of the support range with ~92e6 to spare.
+--- Anything added later goes **above** 900e6, or re-does this arithmetic.
 local SUPPORT_SLOT_BASE = 600000000
+local CONCOURSE_SLOT_BASE = 800000000
+
+--- The low water mark for "a slot this mod invented". Everything at or above it
+--- belongs to us and to neither stock family.
+local OUR_SLOT_MIN = SUPPORT_SLOT_BASE
 
 --- **Leave the elevated track's `snapNodes` alone.** Confirmed 2026-10-09; see
 --- ../NOTES.md, "A station's snapNodes are load-bearing".
@@ -309,13 +333,24 @@ local function seedBothLevels(year)
 	seeded[streetMangle(0, 0, 2)] =
 		busDir .. "era_" .. era .. "_passenger_building_10_10.module"
 
+	-- The concourse, over the entrance seeded just above.
+	--
+	-- Seeded rather than left to the player because it is what makes the
+	-- station work - without one, catchment and waiting capacity fall back to
+	-- a default and the log says so. The id must match what
+	-- `addConcourseSlots` will hand out for that entrance: the entrance's slot
+	-- id with its variant digits cleared, which for `streetMangle(55, 0, 3)` is
+	-- `streetMangle(55, 0, 0)`.
+	seeded[CONCOURSE_SLOT_BASE + streetMangle(55, 0, 0)] =
+		"multi_layer_stations_1::/ml_concourse.module"
+
 	log.message(LOG .. "seeded: rail " .. tostring(tiles) .. " tiles ("
 		.. tostring(tiles * 40) .. " m, era " .. era .. ") + station building"
-		.. " + 1 bus platform")
+		.. " + 1 bus platform + 1 concourse")
 	return seeded
 end
 
---- Which of the three parties owns a module: `"support"`, `"street"` or
+--- Which of the three parties owns a module: `"ours"`, `"street"` or
 --- `"rail"`.
 ---
 --- Primary test is the **module name**, because the two families' slot id
@@ -326,10 +361,14 @@ end
 ---
 --- Our own slots are decided by **id**, not name, and that is deliberate: the
 --- id is ours to hand out, whereas the name belongs to whoever authored the
---- module. A third-party support module - the point of publishing this - would
---- not have `ml_support` in its name, and under the old name test it fell
---- through to the rail bucket, where rail's `pairs(params.modules)` sweep would
---- count it and `GetCoord` would decode its id to nonsense.
+--- module. A third-party module in one of our slots - the point of publishing
+--- this - would not have `ml_support` in its name, and under the old name test
+--- it fell through to the rail bucket, where rail's `pairs(params.modules)`
+--- sweep would count it and `GetCoord` would decode its id to nonsense.
+---
+--- The bucket is `"ours"` rather than naming a particular layer: which of our
+--- layers a slot belongs to is a question for the code that owns that layer,
+--- and it answers it from the id base, not from here.
 ---
 --- Anything that matches nothing is reported and then placed by id band. The
 --- bands are deliberately wider than the real ranges: the point is to classify
@@ -338,8 +377,8 @@ local RAIL_ID_MAX = 15000000
 local STREET_ID_MAX = 500000000
 
 local function familyOf(slotId, entry)
-	if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE then
-		return "support"
+	if type(slotId) == "number" and slotId >= OUR_SLOT_MIN then
+		return "ours"
 	end
 
 	local name = (type(entry) == "table" and entry.name) or entry
@@ -953,8 +992,10 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 	end
 	local orphans = 0
 	for slotId, _entry in pairs(allModules or {}) do
+		-- Support ids only: the concourse layer lives above `CONCOURSE_SLOT_BASE`
+		-- and is not derived from the rail level, so it is not orphaned by this.
 		if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE
-			and not have[slotId] then
+			and slotId < CONCOURSE_SLOT_BASE and not have[slotId] then
 			orphans = orphans + 1
 		end
 	end
@@ -1046,6 +1087,248 @@ local function supportCell(result, slotId)
 end
 
 --------------------------------------------------------------------------------
+-- the concourse: what makes a multi-layer station a station
+--------------------------------------------------------------------------------
+
+--- A concourse spans the bus entrance road and is where the station's catchment
+--- and waiting capacity come from - **for both levels at once**.
+---
+--- This is the third time this mod has arrived at the same conclusion, so it is
+--- worth stating as the principle it is: *nothing automatic can know what the
+--- player means a station to be.* Supports became player-placed because no rule
+--- can know what is under the deck; the viaduct went for the same reason; and
+--- catchment has been a hidden default with a warning attached, which is
+--- neither how the stock stations behave nor an honest failure. Making it a
+--- placed object settles `PLAN.md` Phase 6's open question - "whether to keep
+--- the floor" - by making the floor something the player can see.
+---
+--- Why this does something the stock stations cannot: on the rail side
+--- catchment comes only from `main_building_*` / `side_building_*` / `stairs`,
+--- on the street side only from `entrance*`, and each one feeds **its own**
+--- station record. A multi-layer station is one structure whose two levels
+--- share a single StationGroup, so one building serving both is the honest
+--- model, and a module of ours is the only thing that can do it - it is in
+--- neither family's module map, so neither family's catchment sweep can see it.
+---
+--- 24 m wide, and the number comes from the **street template**, not from the
+--- ground face.
+---
+--- 20 m was the first answer, measured off the entrance module's ground face at
+--- x in [-5, 5] - but that face is the 10 m carriageway, and the road is wider
+--- than its carriageway. `entrance_new.street_template` declares lanes of
+--- `width = 3, 5, 5, 3`: **16 m**, a 10 m carriageway with 3 m sidewalks either
+--- side. So a 20 m concourse leaves its legs just 2 m clear of the road, which
+--- is to say standing on the shoulder.
+---
+--- 24 m puts them at x = +-12, 4 m clear of the road edge. It costs the neat
+--- match with a stock `*_20_20` building, which is a fair trade for legs that
+--- are not in the road.
+local CONCOURSE_W = 24.0
+
+--- 6 m deep, which is **not** a styling choice - it is the largest depth that
+--- keeps the concourse out of the road.
+---
+--- The first attempt was 10 m, reasoned from the entrance edge's snap *node* at
+--- y = -15, and it broke placement two ways at once. The number that matters is
+--- not the snap node, it is the entrance module's **snapPoint**, at
+--- `transl(0, -15 + 5, 0)` - local **y = -10**
+--- (`modular_street_station/modules.script.lua:119-122`). That is the point the
+--- engine aligns to an existing road, so a road snapped to this station lands
+--- *at* y = -10. A 10 m cell centred at -5 reaches exactly that far, so:
+---
+---  * snapping the station to a road put the road inside the concourse
+---    footprint, and placement was refused as a collision - while placing in
+---    free space, where there is no road yet, worked;
+---  * and once a road *was* connected there, the concourse could no longer be
+---    replaced after being demolished, because re-placing it re-checks against
+---    that road. The seeded one survived only because it predated the road.
+---
+--- 6 m centred at -3 covers y = 0 .. -6, leaving 4 m of clearance. It also
+--- happens to be where the concourse belongs: the elevated deck is one platform
+--- and one track wide, so it crosses the entrance road close to the station
+--- edge, not out at the kerb.
+local CONCOURSE_D = 6.0
+
+--- One concourse slot per entrance, at grade, spanning the entrance road.
+---
+--- Derived from the **street** family's slots, the same way `addSupportSlots`
+--- derives from rail's - that machinery is already tested, and deriving means
+--- a second entrance gets a second concourse for free.
+---
+--- The id deliberately **drops the variant digits**. Street slot ids are
+--- `200000 * (coordJ + 100) + 100 * (coordI + 100) + variant`, and the three
+--- entrance variants - `hor_entrance_exit` (3), `hor_entrance` (4), `hor_exit`
+--- (5) - are emitted as three separate slots at the *same transform*
+--- (`modular_terminal.script.lua:2596-2610`). Keying off the raw slot id would
+--- therefore both create duplicate concourse slots at one position and move the
+--- concourse's own id when a player swapped an entrance for an exit, orphaning
+--- the module. `slotId - slotId % 100` is the position without the variant.
+---
+--- Called from `updateFn`, before the module pass, for the same reason the
+--- support slots are.
+local ENTRANCE_SLOT_TYPES = {
+	street_terminal_entrance_exit = true,
+	street_terminal_entrance = true,
+	street_terminal_exit = true,
+}
+
+local function addConcourseSlots(result, streetResult, modules, allModules)
+	local seen = {}
+	local added = 0
+	for _i, slot in ipairs(streetResult.slots or {}) do
+		if ENTRANCE_SLOT_TYPES[slot.type] and slot.transf ~= nil
+			and modules[slot.id] ~= nil then
+			local id = CONCOURSE_SLOT_BASE + slot.id - (slot.id % 100)
+			if not seen[id] then
+				seen[id] = true
+				-- The entrance's own frame, shifted along its local -y, which
+				-- is the direction its road runs in every orientation the
+				-- street station emits - including the pi-rotated "top"
+				-- entrances and the quarter-turned vertical ones.
+				result.slots[#result.slots + 1] = {
+					id = id,
+					transf = transf.mul(slot.transf,
+						transf.transl(vec3.new(0.0, -CONCOURSE_D * 0.5, 0.0))),
+					spacing = {
+						CONCOURSE_W * 0.5, CONCOURSE_W * 0.5,
+						CONCOURSE_D * 0.5, CONCOURSE_D * 0.5,
+					},
+					type = CONCOURSE_TYPE,
+					replaceable = true,
+				}
+				added = added + 1
+			end
+		end
+	end
+
+	result.slotConfig = result.slotConfig or {}
+	result.slotConfig[CONCOURSE_TYPE] = { skipCollisionCheck = true }
+
+	-- Where each concourse cell actually is, in world coordinates, and how deep.
+	--
+	-- Logged next to the existing `snapPoint:` line on purpose: those two
+	-- positions are the ones that must not overlap, and reading them off the
+	-- same rebuild is what turns "placement is refused as a collision" from a
+	-- guess into a measurement. `skipCollisionCheck` does not help here - it
+	-- governs a slot against the rest of the construction, not the
+	-- construction against the world.
+	-- Occupancy is in here on purpose. "I cannot place the module" has two
+	-- completely different causes - the slot is not there, so nothing is
+	-- offered; or the slot is there and the placement is refused - and they
+	-- need separating before anything else. An `occupied=false` line means the
+	-- slot exists and the refusal is a collision; no line at all means the
+	-- slot is gone and the entrance it derives from is the thing to look at.
+	local parts = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		if slot.type == CONCOURSE_TYPE then
+			parts[#parts + 1] = string.format("%d@(%.1f,%.1f) occupied=%s",
+				slot.id, slot.transf[13], slot.transf[14],
+				tostring((allModules or {})[slot.id] ~= nil))
+		end
+	end
+	if #parts > 0 then
+		log.message(LOG .. "concourse slots "
+			.. string.format("%.0fx%.0f: ", CONCOURSE_W, CONCOURSE_D)
+			.. table.concat(parts, ", "))
+	end
+	return added
+end
+
+--- Catchment and waiting capacity from the concourse modules, onto **both**
+--- station records.
+---
+--- Mirrors `constructionutil.addCatchmentCircles`
+--- (`constructionutil.lua:531-546`) rather than calling it, and the reason is
+--- its signature: it maps `metadata.catchmentPassenger` to the *passenger*
+--- station and `metadata.catchmentCargo` to the *cargo* station. Both of ours
+--- are passenger stations, so there is no way to ask it for "this radius, on
+--- both" without either calling it twice - which makes its zero-catchment
+--- warning fire spuriously, duplicating the one we already emit - or
+--- mislabelling the module's metadata as cargo. The sweep is a dozen lines, so
+--- it is cheaper to own it than to work around it.
+---
+--- What is **not** reimplemented is the pool capacity:
+--- `modulesutil.getStationPoolCapacities` takes the module map and the result,
+--- has no side effects, and does exactly the right thing, so it is called.
+---
+--- The circle's position comes from the slot, exactly as the stock function
+--- does it, which is what makes a second concourse over a second entrance
+--- extend the catchment to where that entrance actually is.
+local function applyConcourse(result, stations, modules)
+	-- **Only our own slots.** Both sweeps below would otherwise pick up the
+	-- stock building modules as well - they declare the same
+	-- `catchmentPassenger` and `moreCapacity` fields - and each family's hook
+	-- has already counted its own. Sweeping the whole slot list would add
+	-- every stock building's catchment and capacity a second time, to both
+	-- stations. The filter is the whole reason this takes a copy of the map
+	-- rather than using `params.modules` directly.
+	local mine = {}
+	local circles = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		local entry = modules[slot.id]
+		if slot.type == CONCOURSE_TYPE and entry ~= nil and type(entry) == "table" then
+			mine[slot.id] = entry
+			local catchment = entry.metadata and entry.metadata.catchmentPassenger
+			if catchment ~= nil and catchment.radius ~= nil and slot.transf ~= nil then
+				circles[#circles + 1] = {
+					position = { slot.transf[13], slot.transf[14], slot.transf[15] },
+					radius = catchment.radius,
+				}
+			end
+		end
+	end
+
+	local passCap = modulesutil.getStationPoolCapacities(mine, result)
+
+	for _i, station in ipairs(stations) do
+		station.catchmentAreas = station.catchmentAreas or {}
+		for _j, c in ipairs(circles) do
+			station.catchmentAreas[#station.catchmentAreas + 1] =
+				{ position = c.position, radius = c.radius }
+		end
+		if passCap > 0 then
+			station.pool = station.pool or { edges = {} }
+			station.pool.capacity = (station.pool.capacity or 0) + passCap
+		end
+	end
+
+	return #circles, passCap
+end
+
+--- Placeholder art: one pier either side of the road, full height.
+---
+--- Deliberately **not** the support module's four-sided ring, which would wall
+--- the road off, and deliberately small. Two things it has to respect:
+---
+---  * it stays **strictly inside the cell**, because a seeded module's geometry
+---    is present when the engine runs the placement collision check, so
+---    anything that pokes out towards the kerb refuses the placement (see
+---    `CONCOURSE_D`). One brick course is 4 m deep, so a single row anchored at
+---    the back of a 6 m cell sits at y = -3 .. +1 and never leaves it;
+---  * the piers are at x = +-12, which clears the **16 m** entrance road
+---    (`entrance_new.street_template`: lanes of 3, 5, 5, 3) by 4 m. Measuring
+---    against the 10 m carriageway instead left them 2 m clear and on the
+---    shoulder, which the engine refused - see `CONCOURSE_W`.
+---
+--- It is a stand-in for the tunnel portal that is the real answer (`PLAN.md`
+--- Phase 10 step 3), reusing the support brick so it lines up with whatever
+--- supports stand next to it.
+local function concourseModels(width, depth)
+	local models = {}
+	local courses = math.max(1, math.floor(PITCH / SUPPORT_BRICK_H + 0.5))
+	local y = -depth * 0.5
+	for _s, x in ipairs({ -width * 0.5, width * 0.5 }) do
+		for c = 0, courses - 1 do
+			models[#models + 1] = {
+				id = SUPPORT_BRICK,
+				transf = transf.transl(vec3.new(x, y, c * SUPPORT_BRICK_H)),
+			}
+		end
+	end
+	return models
+end
+
+--------------------------------------------------------------------------------
 -- the track-type and catenary tools
 --------------------------------------------------------------------------------
 
@@ -1101,6 +1384,49 @@ local function copyParamsShallowModules(params)
 	return out
 end
 
+--- The metadata behind a `params.modules` entry, resolved from the module
+--- **resource** rather than read off the entry.
+---
+--- This is the shape stock rail's `upgradeFn` uses -
+--- `api.res.moduleRep.get(find(name)).metadata`
+--- (`modular_station.script.lua:384`) - and the asymmetry with its own
+--- `updateFn`, which reads `entry.metadata` directly (`:495`), is the whole
+--- point: the entry handed to `upgradeFn` is the stored one, not the enriched
+--- one the module pass builds, so `entry.metadata` is not there to be read.
+--- Gating on it is what made the catenary tool highlight the station, offer the
+--- upgrade, and then silently change nothing.
+---
+--- The entry's own metadata stays as a fallback, for the case where the module
+--- resource cannot be found but the engine did populate the entry.
+local function moduleMetadata(entry)
+	local name = type(entry) == "table" and entry.name or nil
+	if type(name) == "string" and name ~= "" then
+		local ok, desc = pcall(function()
+			return api.res.moduleRep.get(api.res.moduleRep.find(name))
+		end)
+		if ok and desc ~= nil and desc.metadata ~= nil then
+			return desc.metadata
+		end
+	end
+	return (type(entry) == "table" and entry.metadata) or nil
+end
+
+--- One line per upgrade decision, deduped against the last one.
+---
+--- The upgrade tools are the one path in this mod with no visible failure mode:
+--- `isAffectedByToolFn` says yes, the cursor offers the upgrade, and if
+--- `upgradeFn` then declines there is nothing on screen - or in the log - to
+--- say so. T4 has now cost two rounds to exactly that silence, so the decision
+--- is logged. The dedup is because the engine calls `upgradeFn` once per drag
+--- step, which would otherwise flood.
+local lastUpgradeLog = nil
+local function logUpgrade(line)
+	if line ~= lastUpgradeLog then
+		lastUpgradeLog = line
+		log.message(LOG .. "upgrade " .. line)
+	end
+end
+
 --- Read the original, write the copy - exactly as the stock version does, which
 --- is what makes the two row walks below terminate sensibly.
 local function swapModule(params, copy, slotId, to)
@@ -1127,12 +1453,8 @@ end
 --- `catenaryAdd` / `catenaryRemove` name the module to swap to. Only the track
 --- modules declare them, so this is self-limiting.
 local function swapCatenary(params, copy, slotId, field)
-	local entry = params.modules[slotId]
-	if entry == nil or entry.name == nil then
-		return false
-	end
-	local desc = api.res.moduleRep.get(api.res.moduleRep.find(entry.name))
-	local to = desc and desc.metadata and desc.metadata[field] or nil
+	local meta = moduleMetadata(params.modules[slotId])
+	local to = meta and meta[field] or nil
 	if to == nil then
 		return false
 	end
@@ -1284,7 +1606,7 @@ end
 
 --- Final tidy-up after both hooks. The lists are already shared, so there is
 --- nothing to collect - only to reconcile.
-local function finish(result, streetResult, railResult)
+local function finish(result, streetResult, railResult, modules)
 	-- Re-read each family's own fields: both hooks **reassign**
 	-- `result.subconstructions`, so whatever the merged table held before is
 	-- stale. Grade level first, so its subconstruction is index 1.
@@ -1339,6 +1661,23 @@ local function finish(result, streetResult, railResult)
 	--- description attributes, which is display text, not capacity. So our
 	--- seeding yields `pool.capacity = 0`, and a station with no capacity holds
 	--- no waiting passengers. Two independent reasons for the same symptom.
+	-- The concourse goes first, because it is what the fallback below is a
+	-- fallback *for*. Both station records get its catchment and its capacity:
+	-- the two levels are one StationGroup and one structure, so one building
+	-- serving both is the honest model.
+	local stations = {}
+	for _i, sub in ipairs(result.subconstructions or {}) do
+		if sub.station ~= nil then
+			stations[#stations + 1] = sub.station
+		end
+	end
+	local nCircles, poolAdded = applyConcourse(result, stations, modules or {})
+	if nCircles > 0 then
+		log.message(LOG .. "concourse: " .. tostring(nCircles)
+			.. " catchment circle(s) and +" .. tostring(poolAdded)
+			.. " pool capacity on each of " .. tostring(#stations) .. " stations")
+	end
+
 	for _i, sub in ipairs(result.subconstructions or {}) do
 		local station = sub.station
 		if station ~= nil then
@@ -1366,11 +1705,12 @@ local function finish(result, streetResult, railResult)
 				-- They are told apart by whether the `support footprints:` line
 				-- for the same rebuild still mentions a `rail_building_*` slot.
 				log.warning(LOG .. "a station had no catchment of its own -"
-					.. " falling back to a default. Either no"
-					.. " catchment-bearing module is placed (fine - check"
-					.. " whether this rebuild's support footprints still list a"
-					.. " rail_building_* slot), or MAIN_BUILDING_SLOT has"
-					.. " stopped landing in a real slot (not fine).")
+					.. " falling back to a default. Expected when there is no"
+					.. " concourse module placed (see the 'concourse:' line for"
+					.. " this rebuild); otherwise either no catchment-bearing"
+					.. " stock module is placed, or MAIN_BUILDING_SLOT has"
+					.. " stopped landing in a real slot - which would be a"
+					.. " seeding bug, most likely after a game update.")
 			end
 
 			station.pool = station.pool or { edges = {} }
@@ -1463,6 +1803,24 @@ return {
 	supportGetModelsFn = function(captureParams, params)
 		-- No slot context during the preview, so show a platform-sized span.
 		return supportModels(5.0, SUPPORT_CELL_D)
+	end,
+
+	--- The concourse's geometry. Placeholder art - see `concourseModels`.
+	---
+	--- The catchment and capacity this module exists for are **not** applied
+	--- here: a module's `updateFn` runs in stage 2, and the station records it
+	--- has to write into are assembled by the two families' hooks in stage 3.
+	--- So the module declares the numbers in its own `metadata` and
+	--- `applyConcourse` reads them back out after the hooks. Same reason the
+	--- pedestrian link cannot live here either.
+	concourseUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
+		for _i, m in ipairs(concourseModels(CONCOURSE_W, CONCOURSE_D)) do
+			addModel(m.id, m.transf, tag, result.models)
+		end
+	end,
+
+	concourseGetModelsFn = function(captureParams, params)
+		return concourseModels(CONCOURSE_W, CONCOURSE_D)
 	end,
 
 	--- What happens to `params.modules` when the player adds or removes one
@@ -1573,22 +1931,38 @@ return {
 	--- `SwapModule` assigns `.name` to whatever it finds at the slot id it is
 	--- handed, without checking what that module is, so a street slot getting
 	--- through would turn a bus platform into a track module. On top of that we
-	--- require `metadata.track`, which is the field rail's own `updateFn` uses
-	--- to recognise a track module - so a platform or a building can never be
+	--- require `metadata.track`, the field rail's own `updateFn` uses to
+	--- recognise a track module - so a platform or a building can never be
 	--- renamed into a track by a mis-aimed tool.
+	---
+	--- That second gate has to read the metadata off the module **resource**,
+	--- not off the `params.modules` entry. Reading the entry is what broke T4
+	--- the second time: every upgrade was declined here, and declining is
+	--- invisible. See `moduleMetadata`.
 	upgradeFn = function(captureParams, params, slotId, constructionConfig)
 		params = params or {}
 		params.modules = params.modules or {}
+		constructionConfig = constructionConfig or {}
 
 		-- An empty slot, which the tool may well drag across.
 		local entry = params.modules[slotId]
 		if entry == nil or type(entry) ~= "table" then
+			logUpgrade("slot=" .. tostring(slotId) .. " is empty - nothing to"
+				.. " change")
 			return params
 		end
-		if familyOf(slotId, entry) ~= "rail" then
+		local fam = familyOf(slotId, entry)
+		if fam ~= "rail" then
+			logUpgrade("slot=" .. tostring(slotId) .. " family=" .. tostring(fam)
+				.. " - only the rail level has upgradable track")
 			return params
 		end
-		if entry.metadata == nil or not entry.metadata.track then
+		-- From the module resource, not from `entry.metadata`: see
+		-- `moduleMetadata`.
+		local meta = moduleMetadata(entry)
+		if meta == nil or not meta.track then
+			logUpgrade("slot=" .. tostring(slotId) .. " name="
+				.. tostring(entry.name) .. " is not a track module - ignored")
 			return params
 		end
 
@@ -1596,11 +1970,18 @@ return {
 		if constructionConfig.streetTemplate then
 			swapRow(params, copy, slotId,
 				trackModuleName(constructionConfig.streetTemplate))
+			logUpgrade("slot=" .. tostring(slotId) .. " track type -> "
+				.. tostring(constructionConfig.streetTemplate) .. ", row now "
+				.. tostring(copy.modules[slotId].name))
 		elseif constructionConfig.catenary then
-			swapRowCatenary(params, copy, slotId,
-				constructionConfig.catenary == 2 and "catenaryAdd"
-					or "catenaryRemove")
+			local field = constructionConfig.catenary == 2 and "catenaryAdd"
+				or "catenaryRemove"
+			swapRowCatenary(params, copy, slotId, field)
+			logUpgrade("slot=" .. tostring(slotId) .. " " .. field
+				.. " -> " .. tostring(copy.modules[slotId].name))
 		else
+			logUpgrade("slot=" .. tostring(slotId) .. " the tool asked for"
+				.. " neither a track type nor a catenary change - ignored")
 			return params
 		end
 		return copy
@@ -1629,12 +2010,16 @@ return {
 		-- counts across hovers. A delete preview must show one fewer than the
 		-- rebuild before it; if it does not, the edit is not reaching
 		-- `updateFn` and the fault is in `preProcessFn`, not in the geometry.
-		local nRail, nStreet, nSupport = 0, 0, 0
+		local nRail, nStreet, nSupport, nConcourse = 0, 0, 0, 0
 		for _k, _v in pairs(railModules) do nRail = nRail + 1 end
 		for _k, _v in pairs(streetModules) do nStreet = nStreet + 1 end
 		for slotId, _v in pairs(params.modules or {}) do
-			if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE then
-				nSupport = nSupport + 1
+			if type(slotId) == "number" then
+				if slotId >= CONCOURSE_SLOT_BASE then
+					nConcourse = nConcourse + 1
+				elseif slotId >= SUPPORT_SLOT_BASE then
+					nSupport = nSupport + 1
+				end
 			end
 		end
 
@@ -1665,6 +2050,8 @@ return {
 		-- Must be before the module pass, which the engine runs off `slots`.
 		local supports = addSupportSlots(result, railResult, RAIL_XF, railModules,
 			params.modules)
+		local concourses = addConcourseSlots(result, streetResult, streetModules,
+			params.modules)
 
 		-- Run-once guard. Everything in the hook is a **mutation** of tables the
 		-- engine already holds - the rail level is lifted in place - so a second
@@ -1691,7 +2078,7 @@ return {
 			if railHook ~= nil then railHook(...) end
 
 			liftRail(result, railResult, RAIL_XF, railSlots)
-			finish(result, streetResult, railResult)
+			finish(result, streetResult, railResult, params.modules)
 			-- After finish: it is what re-reads both families' subconstructions,
 			-- so this is the first point at which every lane list exists.
 			linkLevels(result, PITCH)
@@ -1706,8 +2093,10 @@ return {
 			end
 			log.message(LOG .. "built: modules rail=" .. tostring(nRail)
 				.. " street=" .. tostring(nStreet)
-				.. " support=" .. tostring(nSupport) .. "; "
+				.. " support=" .. tostring(nSupport)
+				.. " concourse=" .. tostring(nConcourse) .. "; "
 				.. tostring(supports) .. " support slots, "
+				.. tostring(concourses) .. " concourse slots, "
 				.. tostring(#(result.subconstructions or {}))
 				.. " subconstructions (tags " .. table.concat(tags, ",") .. "), "
 				.. tostring(stations) .. " stations, "

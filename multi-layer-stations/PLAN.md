@@ -145,10 +145,13 @@ script surface". What changed:
 - `preProcessScript`, routed to street's `preProcessFn`. Without it a street
   passenger platform was one slot instead of two, so **editing** the lower level
   produced half platforms even though placement looked right.
-- `upgradeScript` + `isAffectedByToolScript`, routed to rail's. Without them the
-  elevated track could never be electrified or changed to another track type,
-  because the modular rail station has no param for either - the upgrade tool is
-  the only route.
+- `upgradeScript` + `isAffectedByToolScript`, **reimplemented** rather than
+  routed to rail's. Without them the elevated track could never be electrified
+  or changed to another track type, because the modular rail station has no
+  param for either - the upgrade tool is the only route. Both took two rounds to
+  get working, for two different reasons, and both failures looked identical from
+  the cursor; `NOTES.md`, "The upgrade tools, round two". Confirmed working
+  2026-10-12.
 - The dead `mlBridge` construction param removed. It was visible in the
   placement toolbar (`desc.params` is concatenated with `template.data.params`)
   and read by nobody.
@@ -337,17 +340,90 @@ station buildings the player places**, because that is what a player expects: ad
 a building, the station reaches further. The current version ignores what is
 built on it, which will feel arbitrary as soon as anyone looks.
 
+**Answered 2026-10-09 by Phase 10, the concourse.** "Whether to keep the floor"
+was the open question, and the answer is neither of the two options it offered:
+the floor becomes a **placed object**. A concourse module provides the
+catchment and capacity, so there is something visible to point at, and the
+hidden default stays only as a backstop that says in the log that it fired.
+
+The other half of this phase - "catchment should come from the station buildings
+the player places" - is now true in the only way that matters: it comes from a
+module the player can add, move and remove, and adding a second concourse over a
+second entrance extends the catchment to where that entrance is.
+
 Still open:
 
-1. **Whether to keep the floor.** With catchment purely module-driven, deleting
-   every building leaves a station that silently stops working. Confirmed to be
-   exactly how the stock stations behave - none of them passes a
-   `defaultCatchment` - so matching them is defensible. The current compromise
-   keeps a fallback but warns, which is neither stock behaviour nor a silent
-   failure. Decide deliberately.
-2. The street building's slot id is inferred the same way the rail one was, from
+1. The street building's slot id is inferred the same way the rail one was, from
    `MangleId({coordI, 0, moduleVariants.small_building})`. If the pool-capacity
    fallback stops firing, it landed.
+
+
+## Phase 10 - the concourse
+
+The module that makes a multi-layer station a station: it spans the bus entrance
+road at grade, and it is where the station's catchment and waiting capacity come
+from - for **both** levels at once.
+
+It is the third time this mod has reached the same conclusion, which is why it
+is worth naming: *nothing automatic can know what the player means a station to
+be.* Supports became player-placed because no rule can know what is under the
+deck (Phase 7); the viaduct went for the same reason; catchment follows.
+
+Why a module of ours is the only thing that can do this: on the rail side
+catchment comes only from `main_building_*` / `side_building_*` / `stairs`, on
+the street side only from `entrance*`, and **each feeds its own station record**
+(`constructionutil.addCatchmentCircles` maps `catchmentPassenger` to the
+passenger station and `catchmentCargo` to the cargo one). The two levels share a
+single StationGroup, so one building serving both is the honest model, and our
+module is in neither family's module map - so neither family's sweep sees it and
+there is nothing to double-count.
+
+### Step 1 - catchment and capacity *(done 2026-10-09, awaiting a run)*
+
+- Slot type `ml_concourse`, id `800e6 + streetSlotId` with the variant digits
+  cleared. One slot per **entrance**, derived from the street family's entrance
+  slots the way support slots are derived from rail's - so a second entrance
+  gets a second concourse for free. Clearing the variant digits matters: the
+  three entrance variants are emitted as three slots at one transform, so
+  keying off the raw id would both duplicate the slot and move the concourse's
+  own id when a player swapped an entrance for an exit.
+- 20 m x 10 m. The street entrance's ground face is x in [-5, 5], so the road is
+  10 m and 20 m leaves 5 m either side while matching a stock `*_20_20` building
+  and the `rail_building_size2` footprint. The depth stops short of the
+  entrance edge's snap node at y = -15.
+- The numbers are **data on the module desc** - `metadata.catchmentPassenger`
+  and `metadata.moreCapacity` - read back by `applyConcourse` after the hooks.
+  175 m and +100 capacity, against 150 m for a rail station building and 175 m
+  for a street entrance.
+- Seeded by default, over the seeded entrance.
+
+The work happens in `finish`, not in the module's `updateFn`, and that is
+forced: a module runs in stage 2, and the station records are assembled by the
+two families' hooks in stage 3. The module declares; the script applies.
+
+### Step 2 - anchor the pedestrian link *(next)*
+
+`linkLevels` currently searches for the closest pair of person nodes in plan,
+ignoring z, and in a real session picked a lower endpoint at **z = 5.0** -
+passengers stepping off five metres up. With a concourse present the link should
+start at the concourse's slot instead, which makes it deterministic and puts it
+where the stairs art will be. Keep the vehicle-node refusal.
+
+### Step 3 - the art
+
+A tunnel portal over the road. Today the module draws two brick walls either
+side of the cell, reusing the support course so it at least lines up; that is a
+placeholder and looks like one.
+
+### Still to decide
+
+**How hard a requirement it is.** It cannot be enforced on removal - there is no
+mechanism, and `slot.replaceable = false` is set by no shipped content, which
+puts it in the same untested category as `Slot.alignToTerrain` was before it was
+tested and cleared. So "required" means "the station stops working", which is
+the silent failure this codebase has already paid for once. The intended answer
+is to make the absence **visible in-game** rather than only in the log -
+`result.labelText` is the lever to try - and to keep the backstop until it is.
 
 
 ## Phase 5 - the build UI

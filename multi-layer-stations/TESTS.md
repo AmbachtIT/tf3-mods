@@ -8,6 +8,12 @@ Fill in the results table at the bottom. Anything that fails is a line in the
 README's accepted limitations or a fix, not a thing to shrug at - a beta that
 other modders build on is a beta whose behaviour has to be known.
 
+**This is a pre-publish document, not a development one.** Mid-development, the
+only things worth putting in front of the game are the ones whose outcome is
+genuinely unknown; a fix that has been seen working is taken as working, and the
+table below records that rather than queuing it up again. Running these sections
+end to end is what happens once, when the beta is about to go out.
+
 Prerequisite: close the game and run `.\deploy.ps1 -Validate`. Expect
 `level=Info` and `Messages: none`. The validator is flaky (root `NOTES.md`,
 "Validating a mod from the command line") - if no report appears, validate
@@ -158,7 +164,7 @@ Watch for: half platforms, an orphan tile that cannot be clicked, and
 `the street preProcessFn failed`.
 
 
-## T4 - the upgrade tools *(new, untested)*
+## T4 - the upgrade tools *(catenary works 2026-10-12)*
 
 The delegated `upgradeFn` and `isAffectedByToolFn`. Before this pass the
 elevated track was permanently plain, non-electrified standard track.
@@ -181,6 +187,79 @@ Watch for: a bus platform turning into a track module (the failure mode the gate
 exists for), `the rail upgradeFn failed`, and the tall catenary pole
 (`power_pole_1`, 10.6 m) - it is fine at +12 with nothing above, and it is the
 thing that will not fit once there is a level above.
+
+**Read the log, do not trust the cursor.** This test has now failed twice with
+the tool offering the upgrade and nothing happening, because both failures were
+refusals rather than errors - once in `isAffectedByToolFn`, once in `upgradeFn`.
+`upgradeFn` therefore logs its decision on every branch, deduped, and step 1
+should produce:
+
+    [multi-layer] upgrade slot=<id> catenaryAdd -> ::/trainstation___/infrastructure/track/simple/simple_catenary.street_template
+
+A refusal says so in the same place - `is empty`, `family=street`,
+`is not a track module`, or `neither a track type nor a catenary change`. If
+nothing at all is logged while the cursor still offers the upgrade, then
+`upgradeFn` is not being called and the fault is above it, in the engine's
+mapping from the click to a slot id.
+
+The cheap corroboration, if the log is ever unavailable: the `built:` line's
+**edge-list count must go up by one** the first time a row is electrified. Rail
+pre-creates four track edge lists (standard, standard_catenary, high_speed,
+high_speed_catenary) and resolves them by name, so a `simple_catenary` row has
+to append a fifth. A count that does not move means no renamed module reached
+`updateFn`.
+
+
+## T5a - the concourse *(new, untested)*
+
+The module that supplies the station's catchment and waiting capacity, for both
+levels. `PLAN.md` Phase 10.
+
+**Placement first, because the concourse broke it once.** The concourse is
+seeded, so its geometry is present when the engine runs the placement collision
+check - unlike a support, which the player adds afterwards. Its first version
+was 10 m deep and reached the entrance's **snapPoint** at local y = -10, which
+is exactly where a road snapped to the station lands:
+
+1. **Snap the station to an existing road.** It must place. This failed before,
+   while placing in free space worked, because free space has no road for the
+   concourse to collide with - so *free space placing fine is not evidence*.
+2. **Connect a road, demolish the concourse, then place it again.** It must go
+   back. This failed before for the same reason: re-placing re-checks against
+   the road that is now there, while the seeded one survived because it
+   predated the road.
+3. Compare the two logged positions for the same rebuild - `concourse cells
+   (x,y) 20x6` against `snapPoint: transl=(...)`. They must not overlap, and
+   `skipCollisionCheck` will not save you: it governs a slot against the rest of
+   the construction, not the construction against the world.
+
+Then the functional part:
+
+4. Place a station. One concourse should be seeded over the bus entrance, and
+   the log should say `seeded: ... + 1 concourse` and then
+   `concourse: 1 catchment circle(s) and +100 pool capacity on each of 2 stations`.
+5. **The warning that used to fire as designed should now be absent.** No
+   `a station had no catchment of its own` on a freshly placed station.
+6. Confirm passengers still board on both levels - the catchment is now coming
+   from a different place, so this is a real regression check, not a formality.
+7. **Remove the concourse.** Expect the backstop to fire, with a log line
+   naming the concourse, and expect the station to keep working on the default.
+   Decide whether that is the behaviour you want (Phase 10, "Still to decide").
+8. Put it back. Then add a **second entrance** - a second concourse slot should
+   appear over it, and placing a concourse there should report
+   `2 catchment circle(s)` and double the pool capacity.
+9. Check the catchment does not double-count: the numbers in the log should be
+   exactly `circles x radius` from concourses only. Stock station buildings are
+   counted by their own family's hook, and `applyConcourse` filters to
+   `ml_concourse` slots precisely so they are not added twice.
+10. Swap the entrance for an exit module, or vice versa. The concourse should
+   **stay put** - its slot id drops the entrance's variant digits for exactly
+   this reason.
+11. Save, reload, then force a rebuild. The concourse slot id is ours, so this is
+   the same round-trip risk as the supports in T7.
+
+The art is a placeholder - two brick walls either side of the road - and is
+meant to look unfinished. Step 3 of Phase 10 replaces it with a tunnel portal.
 
 
 ## T5 - supports
@@ -288,7 +367,8 @@ Quick, and each one is a thing a player will do in the first hour.
 | T2 edit elevated level, unconnected | pass 2026-10-09 | underpasses, extra tracks and extra platforms all work |
 | T2 edit elevated level, **track connected** | pass 2026-10-09 | was broken by the `snapNodes` conversion; fixed |
 | T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
-| T4 upgrade tools *(new)* | **fail 2026-10-09**, fix deployed | neither catenary nor track type worked: `isAffectedByToolFn` was delegated and would not resolve on the tool thread. Reimplemented; retest |
+| T4 upgrade tools *(new)* | **pass 2026-10-12** (step 1) | two failures first, same symptom both times. 10-09: `isAffectedByToolFn` was delegated and would not resolve on the tool thread, so the tool never offered the station. 10-12: the tool offered it and `upgradeFn` declined, on a gate reading `entry.metadata` - a field that only exists on the `updateFn` entry. Resolved from `api.res.moduleRep` instead and the catenary tool works. The track-type tool is the same code path with the other branch; the open question is the electric loco actually running |
+| T5a concourse *(new)* | | |
 | T5 supports | | |
 | T6 pedestrian link *(new)* | | |
 | T7 save / reload / rebuild | | |

@@ -609,6 +609,26 @@ stopping on one level let passengers reach the other?) the next thing that
 actually matters.
 
 
+## The deck does not reach the bus entrance
+
+Worth knowing before designing anything that spans the two levels, and it was
+not obvious until the coordinates were worked through.
+
+With the default seeding the elevated deck is **one platform plus one track**,
+so it is 10 m wide. The quarter turn maps rail-local x to world y, which puts
+the deck at world **y in [-2.5, 7.5]** - over the bus platforms. The street
+entrance slot sits at world **y = -15**, and its road runs out to **y = -30**.
+
+So the deck and the entrance road are about 12 m apart and **do not overlap at
+all**. The road only passes under the deck once the player adds enough
+platforms and tracks to widen it - each extra one adds 5 m in world y.
+
+The consequence for the concourse (`PLAN.md` Phase 10): "a tunnel entrance where
+the road passes under the deck" describes something that does not exist in the
+default layout. A concourse derived from the *entrance* slot sits on the
+entrance road, 12 m clear of the deck above it, which is both the wrong place
+for a portal and directly in the way of the road.
+
 ## The elevated track carries no bridge
 
 **Decided 2026-10-09.** The elevated track's edge lists keep `edgeType` at its
@@ -769,6 +789,75 @@ yMin, ... }` in model space and is uniform across eras, so it is the right
 source - keyed by module name, or read off the module desc at runtime if
 `api.res.moduleRep.get(...).updateScript.params` is reachable (rail reads
 `.metadata` off that desc, so the desc is). See `PLAN.md` Phase 7.
+
+
+## The upgrade tools, round two: a gate on `entry.metadata`
+
+**Confirmed** 2026-10-12. The catenary tool highlighted the elevated track,
+accepted a click, and produced no catenaries; changing where the metadata is
+read from fixed it on the next run. That fix changed nothing else that could
+matter, so the gate below *was* the refusal.
+
+The first round of this (2026-10-09, root `NOTES.md`, "sometimes the sibling
+retry is not enough") was `isAffectedByToolFn` failing to resolve, so the tool
+never offered the station at all. That part is fixed: the tool now highlights,
+which means `isAffectedByToolFn` is answering `true`. What is left is
+`upgradeFn` declining, which looks exactly the same to the player and almost the
+same in the log.
+
+What the log says, for a session that ended right after the attempt:
+
+- 85 rebuilds, no `ERROR`, none of the delegation warnings;
+- module edits all applied (`module add slot=8400990 ... name=::/trainstation___/infrastructure/track/simple/simple.street_template`);
+- three rebuilds at the end with **no** module change and the edge-list count
+  unmoved at 8.
+
+That last line is the evidence. A catenary swap renames the track module to the
+`simple_catenary` one, and the track module's `updateFn` resolves its edge list
+by name through `trainstationutil.findOrMakeNewEdgeListNum` - rail pre-creates
+only standard / standard_catenary / high_speed / high_speed_catenary, so a
+`simple_catenary` row has to **append a new edge list**. The count would have
+gone 8 -> 9. It did not, so no renamed module ever reached `updateFn`.
+
+The cause was a gate this mod added and stock does not have:
+
+```lua
+if entry.metadata == nil or not entry.metadata.track then return params end
+```
+
+`entry` is `params.modules[slotId]`. Rail's `updateFn` does read
+`entry.metadata.track` that way (`modular_station.script.lua:495`), but its
+`upgradeFn` pointedly does **not** - it resolves the desc instead, for the same
+module it is about to rename:
+
+```lua
+local moduleDesc = api.res.moduleRep.get(api.res.moduleRep.find(params.modules[slotId].name))
+local metadata = moduleDesc and moduleDesc.metadata or nil
+```
+
+Two functions, one field, two different ways of getting it, in the same file.
+That asymmetry is not a style quirk, it is the API: **the entry handed to
+`updateFn` is the enriched one the engine builds for the module pass, and the
+entry handed to `upgradeFn` is the stored one, which carries `name` and little
+else.** So our gate rejected every upgrade.
+
+Fixed by resolving the metadata from `api.res.moduleRep` (`moduleMetadata` in
+the script) and keeping the entry's own metadata only as a fallback. The gate
+itself is worth keeping - it is what stops a mis-aimed tool renaming a bus
+platform into a track.
+
+**The second lesson is about the silence, and it is the same one as last time.**
+A declining `upgradeFn` has no failure mode: the cursor still offers the
+upgrade, the construction still rebuilds, and nothing anywhere says the swap was
+refused. There is now a deduped `upgrade ...` log line on every branch of
+`upgradeFn`, including each refusal, so the next failure of this kind is a line
+in the log rather than two rounds of inference.
+
+**Not a savegame problem.** The question came up because the station under test
+came out of a save. It is not: `upgradeScript` is read off the `.con.lua` at
+load, so a station in a save gets the current script, and the same session shows
+module editing - which goes through the same stored `params.modules` - working
+on that very station.
 
 
 ## Open questions
