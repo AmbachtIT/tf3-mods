@@ -262,6 +262,26 @@ The art is a placeholder - two brick walls either side of the road - and is
 meant to look unfinished. Step 3 of Phase 10 replaces it with a tunnel portal.
 
 
+## T5b - can a passenger reach the upper platform? *(new, untested)*
+
+Since 2026-10-12 no station building is seeded on either level - the concourse
+replaces both. The rail main building was also the upper level's authored
+pedestrian connection (`person_lanes` and `linkable_person_lanes`,
+`trainstationutil.lua:436-445`), so that route now runs only through
+`linkLevels` and out via the street entrance.
+
+One check, and it is a behavioural one because nothing about this shows up as an
+error: run a train and a bus line through a station with **nothing but the
+seeded modules**, and confirm passengers actually board on the upper level. A
+platform that is unreachable on foot looks exactly like a platform nobody wants
+to use.
+
+If they do not board, place a rail station building by hand. If that fixes it,
+the missing piece is the lanes rather than the catchment, and the concourse has
+to carry a person lane of its own up to the deck - which is Phase 10 step 3's
+job anyway, since that is where the stairs art goes.
+
+
 ## T5 - supports
 
 Known to be imperfect; the point is to confirm *how* imperfect, for the README.

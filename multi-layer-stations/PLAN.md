@@ -351,11 +351,25 @@ the player places" - is now true in the only way that matters: it comes from a
 module the player can add, move and remove, and adding a second concourse over a
 second entrance extends the catchment to where that entrance is.
 
-Still open:
+**Closed 2026-10-12: the seeded station buildings are gone.** With the concourse
+confirmed working in-game, a seeded building on each level is a second building
+the player did not ask for and has to delete twice, so neither is seeded any
+more. The slots are untouched - anyone who wants a station building places one,
+and it then adds its own catchment and capacity on top of the concourse's, which
+is the behaviour this phase was asking for in the first place.
 
-1. The street building's slot id is inferred the same way the rail one was, from
-   `MangleId({coordI, 0, moduleVariants.small_building})`. If the pool-capacity
-   fallback stops firing, it landed.
+What each one was actually worth, for the record: rail `main_building_1` is
+150 m of catchment and +30 capacity; street `era_*_passenger_building_10_10` is
++8 capacity and **no catchment at all** - street-side catchment comes from the
+entrance, which is still seeded. One concourse is 175 m and +100, so removing
+both leaves every station better off on catchment and roughly level on capacity.
+
+The one thing this changes that is not about numbers: the rail main building was
+also contributing `person_lanes` and `linkable_person_lanes`
+(`trainstationutil.lua:436-445`), so the upper level's pedestrian connection now
+runs entirely through `linkLevels` down to grade and out through the street
+entrance. That is the intended design - the concourse is where the stairs
+belong - but it had never been the *only* route before. See TESTS.md T5b.
 
 
 ## Phase 10 - the concourse

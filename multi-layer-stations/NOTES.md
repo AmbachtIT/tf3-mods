@@ -860,7 +860,487 @@ module editing - which goes through the same stored `params.modules` - working
 on that very station.
 
 
+## A support can be placed and not removed
+
+Open. What is established, 2026-10-12:
+
+**The message is the bulldozer's.** `Invalid configuration, N modules will
+collide` comes from `ModuleBulldozerAction.cpp`, not from the builder - see the
+root `NOTES.md`, "The engine's own strings are readable". That fits the symptom
+exactly: the builder accepts a support, the bulldozer then refuses to take it
+away. It also means no Lua hook of ours is involved in the decision.
+
+**Nothing was removable that session, not just supports.** From the `module
+remove` lines: every one of the 93 of them reads `modules=16->15`, and no later
+line ever starts from 15. A removal that committed would show up as the next
+preview starting one lower, so none did. The previews cover one of our supports
+(`674000103`, `674000105`, `674000202`, `684010205`), a **rail** passenger
+platform (`7400020`) and a **street** entrance (`20015503`). Adds in the same
+session did commit, 12 -> 16, one per click. So the refusal is a property of the
+configuration, not of our slot type - which is consistent with a whole-proposal
+check that only the bulldozer runs.
+
+**The first overlap diagnostic was wrong, and its answer was an artefact.** It
+reported `20 of our grade-level slot pair(s) reserve overlapping ground` and
+named a platform cell and the track cell beside it. Both halves were broken:
+
+  * it treated every `spacing` as axis-aligned in construction space, but
+    `RAIL_XF` is `transl(0,0,12) * rotZ(90 deg)`, so a **rail-derived slot's
+    local x runs along construction y**. A support slot keeps the level's
+    rotation on purpose - `addSupportSlots` copies `m`'s 3x3 and only zeroes the
+    z translation - so its rectangle is 5 m along construction y and 7.8 m along
+    construction x, and reading `spacing` the other way round turns two cells
+    5 m apart and 5 m wide, touching exactly, into a 2.8 m overlap;
+  * it swept **all** slots rather than occupied ones, and rail emits
+    `passenger_platform` and `track` for one cell at the same transform with the
+    same rectangle (`modular_station.script.lua:559-560`), so there is always
+    something to find.
+
+The count proves it: 20 pairs is exactly the 4 tiles x 5 cells of
+platform/track pairs on that station and nothing else. The rewrite uses each
+slot's own axes, covers all three families (rail's slots get `RAIL_XF` applied,
+since `liftRail` has not run yet when it is called), counts occupied slots only,
+and separates same-level pairs from cross-level ones. A support at grade under a
+platform at +12 overlaps in plan **by design**; that only matters if the check
+ignores height, which is the next thing the log can tell us.
+
+**The slot rectangles are not the cause.** From the 2026-10-12 14:35 session,
+with the corrected diagnostic: the only *same-level* overlap in the whole
+construction is the concourse against the street entrance
+(`20015503 street/street_terminal_entrance_exit (0.0,-22.5) 16.0x15.0` vs
+`820015500 ours/ml_concourse (0.0,-18.0) 24.0x6.0`), and the concourse is the
+one module that **does** delete. The supports' only overlaps are the five
+cross-level ones with the platform 12 m above them. So a reserved-ground overlap
+is neither necessary nor sufficient for the refusal, and the next section has
+what is.
+
+One more tell in the same log: a removal preview logs a `module remove` line
+because it re-runs the build, and there is one for a street slot
+(`slot=20210000 ... modules=17->15`) and **none for any support slot**. The
+bulldozer therefore refuses a support before it rebuilds anything - a pre-check
+on the target, not a verdict on the resulting configuration.
+
+Still worth keeping in view: our supports stand at grade both under the rail
+deck and alongside the bus station, so a cross-family overlap at grade has never
+actually been measured. The street station's own slots all carry
+`skipCollisionCheck = true` (`modular_terminal.script.lua:1301-1325`); rail sets
+`slotConfig = {}` and so carries none, which the merge patches.
+
+
+## The brickwork has to be built on the cell outline, not tiled across it
+
+Two rounds on this, and the second one was the real bug.
+
+`stone_abut_rep_rep.mdl`'s `boundingInfo` is `bbMin.x = -2.21521`,
+`bbMax.x = 2.216`, `y = 0 .. 4`, `z = 0 .. 2`: **4.43** x 4 x 2 - not the 4.4
+the code assumed - anchored at its own back edge in y and its bottom in z, and
+centred in x. So it is a wall whose length is x, whose thickness is y, and whose
+one finished face points along y.
+
+The sizing was wrong first. `supportModels` laid the piece at full size and
+stepped by `width / cols`, a different number: for a 5 m platform cell,
+`ceil(5 / 4.4)` is 2 columns at a 2.5 m step, and a 4.43 m piece at each covers
+-3.47 .. 0.97 and -0.97 .. 3.47. That is ~2 m of doubled masonry down the middle
+and ~1 m over each edge, and since cells are 5 m apart on the rail grid, the
+cells either side of a platform overlapped each other's brickwork too.
+
+Scaling each piece to its tile fixed the overhang and did **not** fix the
+appearance, because the layout was wrong as well. Every piece was laid
+unrotated, so the "sides" of the cell were more y-facing slabs instead of walls
+running along y. With the tile count rounded, a 5 m cell is one column wide, so
+what came out was two walls across the cell - one on the near edge, one through
+the middle - and nothing at all on the other three edges. Hence "the geometry of
+the support does not coincide with the slot at all": the footprint was right,
+and the thing drawn in it bore no relation to its outline.
+
+The shape that works is four walls **on** the cell's outline, each scaled to the
+edge it stands on, with the two side walls inset by the thickness of the end
+ones so no two walls claim the same ground. `brickWall` does that for one edge
+and `supportModels` calls it four times; `concourseModels` calls it twice, for
+the two piers either side of the entrance road. Verified against the model's own
+bounding box before deploying: a 5.0 x 7.8 cell draws into
+-2.501 .. 2.501 by -3.900 .. 3.900 by 0 .. 12, which is the cell to within the
+rounding of the brick's own asymmetry in x.
+
+**Both faces, deliberately.** Each slab is emitted twice, the second turned
+through 180 degrees (or -90 against +90, for a wall along y) so that the two
+copies fill the same volume with their finished faces opposed. The piece has one
+finished face and nothing in the model file says which way it points, so this
+buys orientation-independence for the price of twice the models: 48 per
+platform-cell support, 24 for a concourse. That is the placeholder bargain, and
+it is what makes the earlier symptom - different faces from different sides,
+geometry that appears only under the module-delete ghost, which draws without
+backface culling - go away without having to work out which way round the mesh
+is. The real answer is still art made for the job (`PLAN.md` Phase 10 step 3),
+and when that lands the twin can go.
+
+
+## Round three: what collides is the collider, 0.8 m into the next cell
+
+**2026-10-12.** The symptom was "the supports are a bit wider than necessary -
+maybe that is why I still cannot delete them", and that guess was right, for a
+reason nothing on screen shows.
+
+`stone_abut_rep_rep.mdl` declares a `BOX` collider that is **not centred on its
+mesh**: `halfExtents {1.71561, 2, 1}` at `(1.20039, 2, 1)`, so it covers
+`x = -0.52 .. 2.92` where the mesh covers `-2.22 .. 2.22`. It reaches 0.70 m
+past the piece's own `+x` edge - see the root `NOTES.md`, "A model's collider is
+not its mesh". Scaled to a tile `step` metres long the overhang is
+`step * (2.916 / 4.43 - 0.5)`, i.e. `step * 0.158`, and because every slab is
+drawn twice with the twin turned 180 degrees, the pair overhangs its tile at
+**both** ends.
+
+With the walls standing on the cell outline, that put the envelope of a
+5.0 x 7.8 platform cell at 2.30 x 4.82 half-extents against a cell of
+2.50 x 3.90: 0.79 m into the next cell across the platforms, 0.92 m along them.
+Supports sit 5.0 m apart across and 7.8 m along, so **every adjacent pair
+overlapped**, by 1.6 m and 1.8 m of collider respectively. In the 14:35 session
+the five supports were at (55.6,0), (24.4,0), (-24.4,0), (40,5) and (-24.4,5) -
+the last two of those are neighbours across the platforms - and in the earlier
+session `674000103` and `674000105` were neighbours along one.
+
+The fix is not a bigger inset, because the overhang is a fraction of whatever is
+left after the inset: a flat 0.75 m off a 5 m cell leaves a 3.5 m pier whose
+collider reaches 2.30 m, which is 0.20 m of clearance rather than the 0.75 m it
+looked like buying. `fitSpan` solves it the other way round,
+`span * (1 + 2 * overhang / n) = cell - 2 * SUPPORT_MARGIN`, iterating twice
+because `n` is `tileCount(span)`; `n` has to be in there or a 40 m building cell
+would shrink to 29.6 m instead of 37.7 m. `tileCount` now rounds **up**, which
+caps a tile at the piece's own length and so caps the overhang at 0.70 m, at the
+price of masonry squeezed to ~70% on spans that do not divide.
+
+With `SUPPORT_MARGIN = 0.5`, verified against the model's own boxes before
+deploying - mesh and collider corners through each model transform:
+
+| cell | drawn envelope | clear of the cell | gap to the neighbour |
+|---|---|---|---|
+| 5.0 x 7.8 (platform) | 4.0 x 5.9 | 0.50 / 0.97 | 1.0 m / 1.9 m |
+| 18.5 x 7.4 (size1 building) | 17.5 x 5.5 | 0.50 / 0.94 | 1.0 m |
+| 40.0 x 7.4 (size3 building) | 39.0 x 5.5 | 0.50 / 0.94 | 1.0 m |
+| 24.0 x 6.0 (concourse) | 24.0 x 5.0 | 0.00 / 0.50 | - |
+
+The concourse is inset along its depth only: its piers' x is load-bearing - it
+is what clears the 16 m entrance road - and a wall running along y has no
+overhang across its thickness, so x was already exact.
+
+`supportUpdateFn` now logs `drawn=` beside `cell=`, from `drawnExtent`, which
+pushes the collider corners through each emitted transform. It has to come out
+smaller than the cell; bigger means geometry is in the neighbour's cell again.
+
+If removal is still refused with all geometry inside its cell, the next lever is
+stock's own answer for a slot stacked under or over another one:
+`spacing = { 0, 0, 0, 0 }` (root `NOTES.md`, "A slot stacked over another one
+reserves no ground"). That would need `supportCell` to read its dimensions from
+somewhere other than `spacing`, which is the only reason it has not been tried
+first.
+
+
+## Round four: a support slot must reserve no ground
+
+> **Superseded in part by "Round seven".** Our own slots still reserve nothing -
+> that part stands, and stock does the same for a stacked slot. Extending it to
+> stock's *rail* slots did not fix anything and cost the tracks their only
+> pickable geometry; those are clipped now, not zeroed.
+
+**2026-10-12, after the clearance fix.** The report that settles the shape of
+the problem: *"I can't delete any station modules after placing a support."*
+Not the support - **any** module, and only once a support exists. So this is not
+a property of the module being removed; it is the configuration being invalid
+while a support is in it, which is exactly what
+`Invalid Configuration, {count} Modules Will Collide` says if `count` is a count
+over the whole proposal rather than the target.
+
+What a support does that nothing else does is reserve ground **under another
+module**. And the engine's module collision check is flat - height is not in it.
+That was already proven here from the other direction, and the proof was written
+off as a placement quirk at the time: before `mergeResults` set
+`skipCollisionCheck` on every slot type, a rail station building at **+12** was
+refused as colliding with the **bus station at grade**, and highlighted it as
+the obstruction. Two modules 12 m apart vertically collide in this engine's
+arithmetic.
+
+So a support reserving its cell at grade under the deck it holds up is a
+collision by construction. `skipCollisionCheck` fixes that for the builder - it
+is a `SlotConfig` field - and does not reach the bulldozer's own copy of the
+check, which is why placing works and removing does not.
+
+Stock's answer is not `skipCollisionCheck`, it is to reserve nothing: the
+platform roof and platform addon slots sit above an occupied platform slot and
+declare `spacing = { 0, 0, 0, 0 }`
+(`rail/modular_station/modular_station.script.lua:567-612`), with the
+relationship carried by `dependentSlots` instead. Our support and concourse
+slots now do the same - the concourse too, because it spans the entrance road on
+purpose and so overlaps the street entrance's tile by design.
+
+Consequences, all small:
+
+- a support module can no longer read its size off its own `spacing`, so
+  `addSupportSlots` records `supportCells[slotId] = { width, cellD }` and
+  `supportCell` reads that. It is rebuilt with the slots, and the module pass
+  runs after the construction pass in the same build;
+- `slotBox` substitutes those dimensions back in, so the overlap diagnostic
+  still measures what our modules *occupy* rather than going quiet about the
+  only modules it was written for;
+- the concourse module already sized itself from `CONCOURSE_W/D`, so nothing
+  there had to change.
+
+Both reservations were zeroed in one go, which does cost the attribution: if
+removal works now, it does not prove the concourse's same-level overlap with the
+entrance was harmless. Zero reservation is the right shape for both regardless -
+each is deliberately stacked on something else - so the trade was worth it.
+
+`dependentSlots` is the half of the stock idiom still missing: removing a
+platform orphans the supports under it rather than taking them with it. See the
+open questions.
+
+
+## The supports were too short, and `SUPPORT_MARGIN` paid for an overhang that was not there
+
+The clearance work gave both directions of a cell the same 0.5 m margin plus an
+allowance for the collider overhang. Along the span that is wasted: a collider
+overhangs the direction its wall **runs**, not the direction of its thickness,
+and in a four-walled cell the extremes along the span are the end walls'
+thickness, which is exact. The side walls, inset by the end walls' 1 m, cannot
+reach past it either - their worst overhang is 0.70 m.
+
+So a 7.8 m cell drew 5.9 m, leaving 2.4 m gaps in what should read as a
+continuous support under the deck, to compensate for an overhang of zero.
+
+Now `SUPPORT_MARGIN` (0.5 m) applies across the cell, where the end walls' own
+overhang lands, and `SUPPORT_SEAM` (0.1 m) applies along it, which is there only
+so two supports in a row do not share a face. A 5.0 x 7.8 platform cell draws a
+3.0 x 7.6 m pier - a 1.0 m gap to the support on the next platform, a 0.2 m seam
+to the one in front - with the envelope 0.50 m and 0.10 m inside the cell.
+
+| cell | mesh | envelope | clear |
+|---|---|---|---|
+| 5.0 x 7.8 (platform) | 3.0 x 7.6 | 4.0 x 7.6 | 0.50 / 0.10 |
+| 18.5 x 7.4 (size1 building) | 16.2 x 7.2 | 17.5 x 7.2 | 0.50 / 0.10 |
+| 40.0 x 7.4 (size3 building) | 37.7 x 7.2 | 39.0 x 7.2 | 0.50 / 0.10 |
+
+The side-wall inset is `max(t, SUPPORT_SEAM + overhang)` rather than `t`, so the
+claim holds for a cell too narrow to carry a 1 m wall as well; at the sizes the
+mod actually produces it is always `t`.
+
+
+## Round five: the colliding modules are stock against stock
+
+**2026-10-12.** Zeroing our own reservations did not restore removal, and the
+203 `module remove` lines in that session say why: every one of them reads
+`modules=18->17` and no later line ever starts from 17, so the preview runs -
+our whole build runs, for every family, `via=plain` for our own supports - and
+the **commit** is refused. The refusal is not about which module is under the
+cursor; it is about the configuration.
+
+The corrected diagnostic then named the pair I had been stepping over for two
+rounds:
+
+```
+occupied slot overlaps: 1 at the same level, 8 across levels, out of 17 modules;
+  cross: 7400000 rail/passenger_platform (0.0,0.0,12.0) 5.0x39.0
+     vs 20010000 street/street_terminal_passenger (15.0,0.0,0.0) 10.0x10.0 dz=12.0
+```
+
+A **rail** platform at +12 against a **street** bus platform at grade. Stock
+against stock, eight such pairs, and nothing to do with supports: it is two
+decks stacked 12 m apart, which is the entire point of the mod, seen by a check
+that has no height in it. The support correlation was a coincidence of when the
+modules got placed - no module removal has ever committed in this construction,
+in any session we have a log for.
+
+So `clearReservations` takes the reserved ground off the rail level's
+**occupied** slots, leaving every empty slot exactly as stock made it (the check
+is over modules, so an empty slot cannot be half of a colliding pair - and
+whatever else the engine does with `spacing`, it keeps doing it wherever a module
+can still be added).
+
+Why this is cheaper than it sounds:
+
+- `spacing` is **write-only** from Lua. Nothing in `rail.zip` or `street.zip`
+  reads it back - the only matches are the four `addSlot` writers and stock's
+  own `{0,0,0,0}` - so no stock code can notice;
+- the protection it buys was already given up here. `skipCollisionCheck` on
+  every slot type is what makes placement possible at all in a two-level
+  construction, and that already stops the builder refusing an overlapping
+  module. The bulldozer's veto is the only consumer left;
+- it does not touch terrain alignment, the placement check against the world
+  (geometry, not reservations), or street's own slots.
+
+The diagnostic now reports the number that matters - how many overlapping pairs
+**still reserve ground on both sides**, which is what a flat check can see - and
+warns only on that. The geometric overlaps stay in the line, because what the
+modules occupy is still worth knowing; `slotBox` reads the pre-zeroing
+reservation through a snapshot so the two numbers can differ honestly.
+
+If removal still fails with `0 of those still reserve ground on both sides`,
+then the check is not reading slot reservations at all and the next suspect is
+module **geometry**: our support models are emitted through `addModel`, which
+tags them `__module_<slotId>`, and a 2D contour of a brick box 12 m tall sits
+directly under the deck's own contour. The test for that is to emit the same
+models untagged, as construction geometry rather than module geometry, and see
+whether the refusal goes with them.
+
+
+## Round six: the concourse is the offender, and the log proves it is not the supports
+
+**2026-10-12, 15:52 session.** Two facts from the same log kill three rounds of
+theory:
+
+- **`support=0` on every `built:` line.** Not one support module was placed in
+  that session, and removal was refused anyway. Supports are out.
+- **Every `module remove` line reads `modules=12->11`.** 278 previews, nothing
+  committed, and `0 of those still reserve ground on both sides` on every
+  rebuild - so `clearReservations` did its job and the refusal is not about
+  reserved ground either.
+
+What the player reports is sharper than anything the log can show: *every module
+is refused except the concourse*. That is the signature of a configuration-level
+veto, not a per-module one. The engine refuses while the configuration is
+invalid and allows exactly the removal that makes it valid again - which means
+the concourse is the thing making it invalid.
+
+It also fits the regression window, which is the player's own observation: this
+worked before the station buildings came out of the seed and the concourse went
+in, and that is the whole of the uncommitted diff apart from support art and
+diagnostics.
+
+The preview timeline, reconstructed from the log, adds one mechanism that was
+invisible until now:
+
+```
+rm slot=20015503 street (the entrance) -> built: street=2 concourse=1, 0 concourse slots
+rm slot=20010000 street (bus platform) -> built: street=1  (street cascades to the entrance)
+```
+
+The concourse slot is **derived from the entrance slot**, so removing the
+entrance - or the bus platform, which takes the entrance with it in street's own
+code - deletes the slot out from under a module that is still in
+`params.modules`. A module with no slot is one of the few things the engine can
+call invalid outright. That explains the street half on its own, and
+`logOrphanModules` now reports it for every family rather than only for
+supports.
+
+It does **not** explain the rail half, where the concourse slot survives the
+preview. So the test is a controlled A/B, and the first half of it is the state
+that used to work:
+
+1. the concourse is no longer seeded - place a station and try to delete a
+   platform. If that works, the concourse is the cause;
+2. then place a concourse and try again. If it breaks, it is the concourse
+   itself and not the fact that it was *seeded*; if it keeps working, seeding
+   was the half that mattered - and seeded modules have a known asymmetry
+   behind them (root `NOTES.md`, "A seeded module's geometry is checked against
+   the world at placement");
+3. if even step 1 fails, the cause is the other half of the window - no station
+   building on either level - and seeding one again is the next move.
+
+Unseeding is defensible on its own terms, which is why it is the change rather
+than a temporary hack: it is the third time this mod has concluded that nothing
+automatic can know what the player means a station to be - supports and the
+viaduct were the first two - and a fresh station falls back to a default
+catchment with a line in the log.
+
+
+## Round seven: the platforms came back, and the tracks were the bill for it
+
+**2026-10-12, 19:43 session.** Unseeding the concourse worked: platforms are
+removable again. Round six's A/B answered step 1 in the affirmative on the first
+try, and the log shows the removals committing - `modules=11->10` once, then the
+next preview starting from 10, which is what a commit looks like from Lua.
+
+Then: *"I can delete the platforms but I can't delete the tracks."*
+
+The log says this is **not** the same failure. Every slot id that appears in a
+`module remove` line in the whole session is a platform or a street module:
+
+```
+41 module remove slot=7399990     21 module remove slot=7400000
+36 module remove slot=7400010     17 module remove slot=7400020
+27 module remove slot=20010000     7 module remove slot=20210000
+```
+
+Slot ids are `base + 1000*i + 10*j` (`modular_station.script.lua:531`) with
+`passengerPlatformSlotId = 7400000` and `trackSlotId = 8400000`, so those four
+are the platform row at `j = -1..2` and **not one track slot id appears at all**.
+A refusal previews and then does not commit; this never previewed. The engine
+never built a candidate configuration, which means it never found a slot under
+the cursor. A miss, not a veto - and the two are only distinguishable from the
+log, because in the game they look identical.
+
+What makes a track different from a platform is that a track module has
+**nothing to click**. `trackmodule.script.lua` emits one model,
+`tn_underground_connection.mdl`, and that file is `collider = { type = "NONE" }`
+with no mesh under its `RootNode` and a bounding box from z -5 to -1: it is the
+person-network provider for the subway under the rails. The rails themselves are
+**edges**, and an edge carries no `__module_<slotId>` tag. So the only thing
+that can identify a track slot is its reserved rectangle - which round four
+zeroed, on every occupied rail slot, including the tracks.
+
+One cause, and it predicts the asymmetry exactly: a platform has a real mesh
+with a real collider and never needed the rectangle.
+
+It also settles the question round four left open, in the uncomfortable
+direction: zeroing the reservations was never shown to help. It was in place for
+the whole of rounds five and six while nothing could be removed, and the thing
+that fixed removal was the concourse. `spacing` is still write-only from *Lua* -
+no stock script reads it - but the engine reads it for at least two purposes,
+and we traded one of them away for a guess about the other.
+
+### Clip, do not zero
+
+`trimReservations` replaces `clearReservations`. For each **occupied** rail
+slot, it clips the rectangle until it no longer overlaps an occupied slot on the
+other level, instead of discarding it:
+
+- four candidate cuts per obstacle - one per side - and the cheapest by lost
+  area wins;
+- a cut must leave at least `RESERVATION_MIN = 1.0` m across, and must keep the
+  slot's **own origin inside** the rectangle. `spacing` is four distances
+  measured from that origin, so a rectangle that does not contain it cannot be
+  written back: the four distances would describe a larger rectangle, inflating
+  straight back over the obstacle. When no cut qualifies the slot is zeroed, and
+  the log says so with a warning;
+- the write-back is exact only while the slot's axes are at a right angle to the
+  construction's. `RAIL_XF` is a 90 degree `rotZ`, so they are, and the code
+  checks it rather than assuming it.
+
+On the four-tile test station this costs almost nothing. Six of the eight
+occupied rail slots do not overlap the street level at all and keep their full
+5 x 39 m; the platform and the track at `j = 0` overlap the bus platform
+(10 x 10 at `(15,0,0)`) and come back as 5 x 29.5 m, clipped at `x = 10` where
+the bus station starts. Verified offline against the logged geometry: the
+round-trip through `spacing` is exact to 1e-9 and nothing overlaps afterwards.
+
+`logSlotOverlaps` had to change with it. Its `reserved` count used to be "both
+sides still reserve ground", which was a yes/no per slot; a clipped slot still
+reserves ground, just less of it, so the count is now taken from a **second**
+set of boxes built from the live `spacing` rather than from the pre-trim
+snapshot. The line now reads `N pair(s) of reserved rectangles still overlap
+after trimming, out of M that reserve any`, and the geometry half of the line -
+`same` and `cross` - still reports what the modules *occupy*, which is the honest
+number for a mod whose entire point is two decks 12 m apart.
+
 ## Open questions
+
+- ~~Does zeroing the slot reservations restore module removal?~~ **No -
+  answered 2026-10-12.** It was in place throughout rounds five and six while
+  nothing could be removed, and what restored removal was unseeding the
+  concourse. Zeroing then cost the tracks their only pickable geometry, so it is
+  now a clip rather than a wipe. See "Round seven". What is still **unknown** is
+  whether a cross-level reservation overlap vetoes a removal *at all*; the next
+  build no longer has one to find out with, so answering it would mean putting
+  one back deliberately.
+- **Does the bulldozer's flat check look at module *geometry* as well as slot
+  reservations?** Nothing has ruled it out, and it is the remaining suspect if a
+  removal is ever refused again with no overlapping rectangle in the log. The
+  test is to emit a module's models untagged, as construction geometry
+  (`result.models` directly rather than through `addModel`), and see whether the
+  refusal follows the tag or the geometry.
+- **Should support slots be `dependentSlots` of the rail module above?** Stock
+  pairs a roof slot with its platform that way, and it is the half of the idiom
+  this mod does not implement: removing a platform orphans its supports instead
+  of taking them with it. Appending rather than replacing matters - rail already
+  uses `dependentSlots[platformId]` for the roof and addon.
 
 - ~~Do two station records in one construction join one StationGroup?~~
   **Answered yes, 2026-10-09** - interchange works and costs nothing. See

@@ -223,21 +223,23 @@ end
 local PASSENGER_PLATFORM_SLOT = 7400000
 local TRACK_SLOT = 8400000
 
---- The rail station building's slot.
+--- **No station building is seeded on either level.** The concourse is the
+--- station building now, for both levels at once, so a seeded one on top of it
+--- is a second building the player did not ask for and has to delete twice.
+--- The slots are untouched, so anyone who wants one still places it.
 ---
---- `mainBuildingSlotId = 3400000` (`modular_station.script.lua:39`), and the
---- stock seeding's non-head branch uses `mainBuildingSlotId + 10 * k + offset`
---- (`:218`), with `offset = 0` for fewer than three tracks and `k = 2` when the
---- platform's tile span is odd - which ours is, running -1..2.
----
---- Unlike the platform slots, this is **not** read off the slot creation:
---- building slots come from loops at `:690-780` that are not worth
---- reverse-engineering. The id is inferred from the seeding side instead, and
---- the catchment fallback in `finish` warns loudly if it turns out not to land
---- in a real slot - `addCatchmentCircles` needs a matching slot to take the
---- position from, so a wrong id presents as "no catchment", not as a misplaced
---- building.
-local MAIN_BUILDING_SLOT = 3400000 + 10 * 2
+--- Kept because it cost a round to work out and Phase 8 will want it again:
+--- the rail building's slot is `mainBuildingSlotId + 10 * k + offset`
+--- (`modular_station.script.lua:218`), where `mainBuildingSlotId = 3400000`
+--- (`:39`), `offset = 0` below three tracks, and `k = 2` when the platform's
+--- tile span is odd - which ours is, running -1..2. So `3400020` for this
+--- layout. It is inferred from the seeding side rather than read off the slot
+--- creation, because building slots come out of loops at `:690-780` that are
+--- not worth reverse-engineering; a wrong id there presents as "no catchment"
+--- rather than as a misplaced building, since `addCatchmentCircles` needs a
+--- matching slot to take its position from. The street side's is
+--- `MangleId({coordI, 0, moduleVariants.small_building})`
+--- (`modular_terminal.script.lua:2629`), `small_building = 2`.
 
 --- Stairs are **not** seeded, deliberately.
 ---
@@ -306,18 +308,6 @@ local function seedBothLevels(year)
 		tiles = tiles + 1
 	end
 
-	-- A station building, raised with the rest of the level.
-	--
-	-- Not decoration: on the rail side catchment and pool capacity come **only**
-	-- from building modules (`main_building_*`, `side_building_*`, `stairs`),
-	-- never from platforms, so a station without one attracts nobody. Stock
-	-- stations behave the same way - none of them passes a `defaultCatchment`
-	-- to `addCatchmentCircles`, so stripping the last building off a stock
-	-- modular station leaves it running lines and collecting no passengers.
-	seeded[MAIN_BUILDING_SLOT] =
-		"::/stations/rail/modular_station/main_building_1_era_" .. era .. ".module"
-
-
 	-- One bus platform plus the entrance, the same shape the stock street
 	-- station seeds for a single platform (see pick-single-platform-side's
 	-- notes for the slot layout).
@@ -325,28 +315,40 @@ local function seedBothLevels(year)
 	seeded[streetMangle(0, 0, 0)] = busDir .. "passenger_platform.module"
 	seeded[streetMangle(0, 1, 0)] = busDir .. "passenger_platform.module"
 	seeded[streetMangle(55, 0, 3)] = busDir .. "entrance_exit.module"
-	-- And a street building, for the same reason as the rail one: on this side
-	-- `moreCapacity` - the station's pool capacity - comes only from
-	-- `era_*_passenger_building_*`. Slot id from
-	-- `MangleId({coordI, 0, moduleVariants.small_building})`
-	-- (`modular_terminal.script.lua:2629`), with `small_building = 2`.
-	seeded[streetMangle(0, 0, 2)] =
-		busDir .. "era_" .. era .. "_passenger_building_10_10.module"
 
-	-- The concourse, over the entrance seeded just above.
+	-- **The concourse is not seeded**, and that is a deliberate step back.
 	--
-	-- Seeded rather than left to the player because it is what makes the
-	-- station work - without one, catchment and waiting capacity fall back to
-	-- a default and the log says so. The id must match what
-	-- `addConcourseSlots` will hand out for that entrance: the entrance's slot
-	-- id with its variant digits cleared, which for `streetMangle(55, 0, 3)` is
-	-- `streetMangle(55, 0, 0)`.
-	seeded[CONCOURSE_SLOT_BASE + streetMangle(55, 0, 0)] =
-		"multi_layer_stations_1::/ml_concourse.module"
+	-- It was seeded, because it is what makes the station work - without one,
+	-- catchment and waiting capacity fall back to a default and the log says
+	-- so. But module removal is refused for every module in this construction
+	-- *except the concourse itself*, and the concourse is the newest thing in
+	-- here: the regression window is this seeding change plus the concourse
+	-- feature, and nothing else. A configuration that is invalid while the
+	-- concourse is in it, and valid the moment it is gone, is exactly what the
+	-- bulldozer behaves like.
+	--
+	-- Seeding is also the half of it with a known engine asymmetry behind it: a
+	-- **seeded** module's geometry is checked against the *world* when the
+	-- construction is placed, where a player-added one is only checked against
+	-- the construction (root `NOTES.md`, "A seeded module's geometry is checked
+	-- against the world at placement"). So a seeded module of ours near the
+	-- entrance road is the one piece of this that is known to be treated
+	-- differently from everything else.
+	--
+	-- Leaving it to the player costs a default catchment on a fresh station,
+	-- which is logged and survivable, and it is the same conclusion supports
+	-- and the viaduct both reached: nothing automatic can know what the player
+	-- means a station to be. If removal works on a station with no concourse
+	-- and breaks again when one is placed, the concourse is the cause and
+	-- seeding was not the half that mattered. The id it would use is the
+	-- entrance's slot id with its variant digits cleared -
+	-- `CONCOURSE_SLOT_BASE + streetMangle(55, 0, 0)` for the entrance seeded
+	-- above - which is what `addConcourseSlots` hands out.
 
 	log.message(LOG .. "seeded: rail " .. tostring(tiles) .. " tiles ("
-		.. tostring(tiles * 40) .. " m, era " .. era .. ") + station building"
-		.. " + 1 bus platform + 1 concourse")
+		.. tostring(tiles * 40) .. " m, era " .. era .. ")"
+		.. " + 1 bus platform + entrance, no concourse and no station"
+		.. " building on either level")
 	return seeded
 end
 
@@ -857,9 +859,64 @@ end
 --- chosen partly to match the stone viaduct that used to carry the track, and
 --- that viaduct is gone, so the one argument for *stone* specifically has gone
 --- with it. This is placeholder art pending models made for the job.
+---
+--- The width is the one number that was wrong, and it mattered: the piece is
+--- **4.43 m** wide, not 4.4. `stone_abut_rep_rep.mdl`'s `boundingInfo` is
+--- `bbMin.x = -2.21521`, `bbMax.x = 2.216`, against `y = 0 .. 4` and
+--- `z = 0 .. 2` - so it is anchored at its own back edge in y and its bottom in
+--- z, but **centred** in x. See `tileCount` for why a width that is not a
+--- divisor of the cell is a problem rather than a rounding detail.
 local SUPPORT_BRICK = "::/infrastructure/bridge/stone/stone_abut_rep_rep.mdl"
+local SUPPORT_BRICK_W = 4.43
 local SUPPORT_BRICK_D = 4.0
 local SUPPORT_BRICK_H = 2.0
+
+--- The brick's **collider**, which is not its mesh - and is why a support can
+--- be placed and then refused for colliding with its neighbour.
+---
+--- `stone_abut_rep_rep.mdl` declares a `BOX` collider of halfExtents
+--- `{1.71561, 2, 1}` at `(1.20039, 2, 1)`, so in model space it covers
+--- `x = -0.52 .. 2.92` against a mesh of `x = -2.22 .. 2.22`. It is not centred
+--- on the piece it belongs to, and it reaches 0.70 m past the mesh's own `+x`
+--- edge. Scaled to a tile of `step` metres that overhang is
+--- `step * (2.916 / 4.43 - 0.5)`, and since every slab is drawn twice - the
+--- twin turned 180 degrees - the pair overhangs its tile at **both** ends, and
+--- it is the collider rather than the mesh that bounds the pair.
+---
+--- With the walls standing on the cell outline that put ~0.8 m of collider into
+--- the next cell on every side, while the brickwork itself sat neatly inside
+--- its own. Nothing on screen says so; what says so is the bulldozer refusing
+--- the module. Hence `fitSpan` and the `drawn` figure in the log.
+local SUPPORT_BRICK_COLL_MIN = -0.51522
+local SUPPORT_BRICK_COLL_MAX = 2.916
+local SUPPORT_BRICK_OVERHANG = SUPPORT_BRICK_COLL_MAX / SUPPORT_BRICK_W - 0.5
+
+--- How many copies of a `piece`-long brick to lay along a `span`, at least one.
+---
+--- Paired with scaling each copy to `span / n`, which is what keeps the
+--- brickwork inside its cell. Laying the piece at its own size and stepping by
+--- `span / n` does not: for a 5 m platform cell, `ceil(5 / 4.43)` is 2 columns
+--- at a 2.5 m step, and a 4.43 m piece at each of them covers -3.47 .. 0.97 and
+--- -0.97 .. 3.47. That is ~2 m of doubled masonry down the middle of the cell
+--- and ~1 m hanging over each edge, so the cells either side of a platform -
+--- 5 m apart, by the rail grid - overlap each other's brickwork as well. Which
+--- is what "the supports look off" is: the footprint is right, the thing drawn
+--- in it is 6.9 m wide.
+---
+--- Rounds **up**, so a tile is never longer than the piece itself. That is a
+--- collider bound, not a taste in brickwork: `SUPPORT_BRICK_OVERHANG` grows
+--- with the tile, so rounding to the nearest count - which could stretch a
+--- tile to 1.5 pieces - let the overhang reach 1.0 m, more than the clearance
+--- a cell can give it. Capping the tile at `piece` caps the overhang at
+--- `piece * 0.158`, which is 0.70 m, and which `fitSpan` can then solve
+--- against. The price is squeezed masonry on spans that do not divide: a 3.0 m
+--- pier face is one piece at 69%.
+---
+--- The epsilon keeps a span that *is* a whole number of pieces from rounding up
+--- to one more than it needs.
+local function tileCount(span, piece)
+	return math.max(1, math.ceil(span / piece - 0.001))
+end
 
 --- Supports are **placed by the player**, on their own slot layer at grade
 --- aligned to the grid of the level above.
@@ -877,6 +934,14 @@ local SUPPORT_BRICK_H = 2.0
 --- `SUPPORT_TYPE` and `SUPPORT_SLOT_BASE` are declared at the top of the file,
 --- because the module classifier needs them.
 local SUPPORT_CELL_D = 8.0
+
+--- The cell each support slot stands in, by slot id: `{width, depth}`.
+---
+--- This exists because a support slot reserves **no ground at all** - see
+--- `addSupportSlots` - so the module can no longer read its own size back off
+--- `spacing`. Rebuilt whenever the slots are, and read by the module pass,
+--- which the engine runs afterwards in the same build.
+local supportCells = {}
 
 --- Real footprints of the things that sit on the elevated level, by slot type.
 ---
@@ -919,6 +984,7 @@ local FOOTPRINTS = {
 local function addSupportSlots(result, railResult, xf, modules, allModules)
 	local added = 0
 	local sized = {}
+	supportCells = {}
 	for _i, slot in ipairs(railResult.slots or {}) do
 		local sp = slot.spacing
 		if sp ~= nil and modules[slot.id] ~= nil then
@@ -966,10 +1032,31 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 					transf = base,
 					-- Symmetric, because the offset is already baked into the
 					-- transform above. The module reads this to size itself.
-					spacing = { width * 0.5, width * 0.5, cellD * 0.5, cellD * 0.5 },
+					-- **No reserved ground**, which is what stock does for a slot
+					-- stacked over another one: the platform roof and addon
+					-- slots sit above an occupied platform slot and declare
+					-- `spacing = { 0, 0, 0, 0 }`
+					-- (`modular_station.script.lua:567-612`) while the platform
+					-- under them reserves its full tile.
+					--
+					-- The reason is that the engine's module collision check is
+					-- **flat**: it was already proven here, from the other
+					-- direction, when a rail station building at +12 was refused
+					-- as colliding with the bus station at grade and
+					-- `skipCollisionCheck` was the fix (see the merge in
+					-- `mergeResults`). A support reserving ground directly under
+					-- the deck it holds up is therefore a collision by
+					-- construction, and `skipCollisionCheck` does not reach the
+					-- bulldozer's own copy of the check - which is why nothing
+					-- in the station can be removed once a support exists.
+					--
+					-- The module reads `supportCells` for its size instead.
+					spacing = { 0.0, 0.0, 0.0, 0.0 },
 					type = SUPPORT_TYPE,
 					replaceable = true,
 				}
+				supportCells[SUPPORT_SLOT_BASE + slot.id * 10 + k] =
+					{ width, cellD }
 				added = added + 1
 			end
 		end
@@ -1032,54 +1119,226 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 	return added
 end
 
---- The models a support module draws: a brick box filling its cell, from the
---- ground to the underside of the level above.
+--- One wall of a cell, drawn **twice**.
+---
+--- The brick has one finished face, and which way that face points is not
+--- something this mod can read off the model, so every slab is emitted again
+--- turned through 180 degrees. The two copies fill the same volume, so the wall
+--- is finished on both sides whichever way round the mesh is, and no
+--- orientation has to be guessed. That is the placeholder bargain: twice the
+--- models, and nothing that looks hollow from one side and solid from the
+--- other.
+---
+--- `x0..x1` by `y0..y1` is the wall's footprint in the slot's own frame, and
+--- `alongY` says which way it runs. The brick is `SUPPORT_BRICK_W` long in x by
+--- `SUPPORT_BRICK_D` deep in y, anchored at `y = 0` and centred in x, so:
+---
+---  * a wall running along x is laid unrotated at `y0`, and its twin at `y1`
+---    turned by pi - which puts that copy's own anchor on the far edge, so both
+---    cover `y0..y1`;
+---  * a wall running along y needs a quarter turn first, +pi/2 anchored at `x1`
+---    and -pi/2 anchored at `x0`.
+---
+--- Both are scaled to the tile they are laid in, which is what keeps the
+--- brickwork inside the cell - see `tileCount`.
+local function brickWall(models, x0, x1, y0, y1, alongY)
+	local courses = math.max(1, math.floor(PITCH / SUPPORT_BRICK_H + 0.5))
+	local length = alongY and (y1 - y0) or (x1 - x0)
+	local thick = alongY and (x1 - x0) or (y1 - y0)
+	if length <= 0.0 or thick <= 0.0 then return end
+
+	local n = tileCount(length, SUPPORT_BRICK_W)
+	local step = length / n
+	local scale = vec3.new(step / SUPPORT_BRICK_W,
+		thick / SUPPORT_BRICK_D, 1.0)
+
+	for i = 0, n - 1 do
+		for c = 0, courses - 1 do
+			local z = c * SUPPORT_BRICK_H
+			local a, b
+			if alongY then
+				local cy = y0 + step * (i + 0.5)
+				a = { math.pi * 0.5, vec3.new(x1, cy, z) }
+				b = { -math.pi * 0.5, vec3.new(x0, cy, z) }
+			else
+				local cx = x0 + step * (i + 0.5)
+				a = { 0.0, vec3.new(cx, y0, z) }
+				b = { math.pi, vec3.new(cx, y1, z) }
+			end
+			for _j, t in ipairs({ a, b }) do
+				models[#models + 1] = {
+					id = SUPPORT_BRICK,
+					transf = transf.scaleXYZRotZTransl(scale, t[1], t[2]),
+				}
+			end
+		end
+	end
+end
+
+--- How much of its cell a support leaves clear on every side.
+---
+--- This reads as cosmetic - "the supports are wider than they need to be" - and
+--- it is the deletion bug. The walls used to stand on the cell outline, and
+--- with the collider overhang above, two supports in neighbouring cells
+--- overlapped by ~1.6 m of collider each way. In the rail grid neighbours are
+--- 5.0 m apart across the platforms and 7.8 m along them, so **every adjacent
+--- pair collided**, and the bulldozer refuses a module whose geometry collides
+--- with another module's. `skipCollisionCheck` does not reach that check: it is
+--- a `SlotConfig` field, read by the builder, and the refusal comes from
+--- `ModuleBulldozerAction.cpp`. The same mechanism refused the concourse's
+--- placement when its piers hung over the kerb, which is the second time this
+--- mod has paid for geometry leaving its cell - see `concourseModels`.
+---
+--- Half a metre of ground is left clear on every side, measured against the
+--- **envelope** rather than the brickwork - so the gap between two supports in
+--- neighbouring cells is a full metre of nothing, not a hairline the engine can
+--- round the wrong way. It also answers the look: a 5 m platform cell draws a
+--- 3.0 m pier rather than a slab flush with its neighbour.
+local SUPPORT_MARGIN = 0.5
+
+--- The span to draw in a `cell`-metre direction so the envelope - collider
+--- overhang included - stays `SUPPORT_MARGIN` inside it.
+---
+--- Insetting by a fixed amount does not work, because the overhang is a
+--- fraction of the *tile*, so it grows with whatever is left after the inset:
+--- a flat 0.75 m off a 5 m cell leaves a 3.5 m pier whose collider reaches
+--- 2.30 m, which is 0.20 m from the cell edge rather than the 0.75 m the inset
+--- appeared to buy. Solving it the other way round -
+--- `span * (1 + 2 * overhang / n) = cell - 2 * margin` - puts the clearance
+--- where it was promised, and because `n` is `tileCount(span)` the answer is
+--- found by iterating twice from the unadjusted span. The `n` matters: without
+--- it a 40 m building cell would shrink to 29.6 m instead of 37.7 m, since its
+--- nine tiles each overhang a ninth as much as one long tile would.
+local function fitSpan(cell)
+	local free = cell - 2.0 * SUPPORT_MARGIN
+	-- A cell too small to give the margin away twice over still draws
+	-- something, scaled down far enough that the overhang cannot escape it.
+	if free <= 0.0 then return cell * 0.5 end
+	local span = free
+	for _i = 1, 3 do
+		span = free / (1.0 + 2.0 * SUPPORT_BRICK_OVERHANG
+			/ tileCount(span, SUPPORT_BRICK_W))
+	end
+	return span
+end
+
+--- How much of a cell a support leaves clear where it butts **end to end**
+--- against the next one.
+---
+--- Small on purpose, and the asymmetry with `SUPPORT_MARGIN` is the point: a
+--- collider only overhangs along the direction its wall *runs*, not across its
+--- thickness. In a four-walled cell the `y` extremes are the end walls'
+--- thickness, which is exact, and the side walls are inset far enough that
+--- their own overhang cannot reach past it - so `y` needs no allowance for the
+--- collider at all, only a seam so two supports in a row do not share a face.
+---
+--- Giving `y` the full `SUPPORT_MARGIN` instead is what made a row of supports
+--- too short: it cost 1 m of a 7.8 m cell to compensate for an overhang that
+--- is not there, leaving 2.4 m gaps in what should read as a continuous
+--- support under the span.
+local SUPPORT_SEAM = 0.1
+
+--- How thick a placeholder wall is: 1 m, or less in a cell too small for that.
+local function wallThickness(width, depth)
+	return math.min(1.0, width * 0.4, depth * 0.4)
+end
+
+--- What a support module was asked to draw, and in which frame. Deduped the
+--- same way and for the same reason as `logUpgrade`: the engine runs the module
+--- pass on every rebuild, so one line per distinct cell is the useful rate.
+local lastSupportDraw = nil
+local function logSupportDraw(line)
+	if line ~= lastSupportDraw then
+		lastSupportDraw = line
+		log.message(LOG .. "support draw: " .. line)
+	end
+end
+
+--- The models a support module draws: a brick box standing on its cell, from
+--- the ground to the underside of the level above.
 ---
 --- Sized from the slot it was placed in rather than fixed, so one module serves
 --- a 5 m platform span and a 15 m building footprint alike. `spacing` on a
 --- support slot is symmetric by construction, so the cell is
---- `[-w/2, w/2] x [-d/2, d/2]`.
+--- `[-w/2, w/2] x [-d/2, d/2]`, and the four walls stand on the outline of the
+--- box that `fitSpan` and `SUPPORT_SEAM` fit **inside** that, not on the
+--- cell's own edge.
 ---
---- Tiled from one abutment course so the brickwork lines up between adjacent
---- modules: the course is 4.4 wide x 4 deep x 2 tall, and it anchors at its own
---- back edge in y.
+--- That outline is the point, and it is what the previous version got wrong.
+--- It laid every piece unrotated, so the "sides" of the cell were more
+--- x-facing slabs rather than walls along y, and with the cell one course wide
+--- the result was two walls across it - one on the near edge, one through the
+--- middle - and nothing at all on the other three. Hence "the geometry does
+--- not coincide with the slot": the footprint was right, the thing drawn in it
+--- bore no relation to it.
+---
+--- Hollow rather than solid: 12 m of masonry filling the footprint reads as a
+--- block rather than a support, and the inside of a closed box cannot be seen.
 local function supportModels(width, depth)
 	local models = {}
-	local courses = math.max(1, math.floor(PITCH / SUPPORT_BRICK_H + 0.5))
-	local cols = math.max(1, math.ceil(width / 4.4))
-	local rows = math.max(1, math.ceil(depth / SUPPORT_BRICK_D))
+	-- Across the cell the end walls run the full width, so that direction pays
+	-- for their collider overhang (`fitSpan`). Along it, only a seam.
+	local w = fitSpan(width)
+	local d = math.max(depth - 2.0 * SUPPORT_SEAM, 0.0)
+	local t = wallThickness(w, d)
+	local hw, hd = w * 0.5, d * 0.5
 
-	local colStep = width / cols
-	for i = 0, cols - 1 do
-		local x = -width * 0.5 + colStep * (i + 0.5)
-		for r = 0, rows - 1 do
-			-- A **facade**, not a solid block: only the outer ring of the cell
-			-- gets brickwork. Filling the footprint read as a lump of masonry
-			-- rather than a support, and it is also a lot of models for geometry
-			-- nobody can see. Walls still line up between adjacent cells, so a
-			-- run of supports reads as a continuous arcade.
-			local onEdge = (i == 0) or (i == cols - 1)
-				or (r == 0) or (r == rows - 1)
-			if onEdge then
-				local y = -depth * 0.5 + r * SUPPORT_BRICK_D
-				for c = 0, courses - 1 do
-					models[#models + 1] = {
-						id = SUPPORT_BRICK,
-						transf = transf.transl(vec3.new(x, y, c * SUPPORT_BRICK_H)),
-					}
-				end
-			end
+	-- The side walls are inset by the end walls' thickness, so no two walls of
+	-- a cell claim the same ground - except where that is not enough to swallow
+	-- their own overhang, which only arises in a cell too narrow for a 1 m
+	-- wall.
+	local side = math.max(t, SUPPORT_SEAM
+		+ SUPPORT_BRICK_OVERHANG * math.min(d, SUPPORT_BRICK_W))
+
+	brickWall(models, -hw, hw, -hd, -hd + t, false)
+	brickWall(models, -hw, hw, hd - t, hd, false)
+	brickWall(models, -hw, -hw + t, -hd + side, hd - side, true)
+	brickWall(models, hw - t, hw, -hd + side, hd - side, true)
+	return models
+end
+
+--- The envelope a set of support models occupies, **colliders included**, in
+--- the frame they were built in.
+---
+--- Worth measuring rather than reasoning about: the whole deletion problem was
+--- geometry leaving its cell by an amount nothing on screen showed, so the log
+--- now carries it as two numbers beside the cell it has to fit in. A `drawn`
+--- wider than `cell` means a module is reaching into its neighbour again.
+---
+--- Only the collider's corners are needed. It is the collider that is wider
+--- than the piece (`SUPPORT_BRICK_COLL_MIN .. _MAX` against a mesh centred on
+--- zero), and it is flush with the mesh in y and z.
+local function drawnExtent(models)
+	local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+	local corners = {
+		{ SUPPORT_BRICK_COLL_MIN, 0.0, 0.0 },
+		{ SUPPORT_BRICK_COLL_MAX, 0.0, 0.0 },
+		{ SUPPORT_BRICK_COLL_MIN, SUPPORT_BRICK_D, 0.0 },
+		{ SUPPORT_BRICK_COLL_MAX, SUPPORT_BRICK_D, 0.0 },
+	}
+	for _i, m in ipairs(models) do
+		for _j, c in ipairs(corners) do
+			local q = applyMat(m.transf, c)
+			x0, x1 = math.min(x0, q[1]), math.max(x1, q[1])
+			y0, y1 = math.min(y0, q[2]), math.max(y1, q[2])
 		end
 	end
-	return models
+	if x1 < x0 then return 0.0, 0.0 end
+	return x1 - x0, y1 - y0
 end
 
 --- The cell a support module sits in, read back off its slot. Falls back to one
 --- platform-sized span if the slot cannot be found, so a stale module from an
 --- older savegame still draws something rather than nothing.
 local function supportCell(result, slotId)
+	local cell = supportCells[slotId]
+	if cell ~= nil then return cell[1], cell[2] end
+	-- `spacing` is zero on a support slot now, so this only ever answers for a
+	-- slot built by something else; it is kept because it costs nothing and
+	-- the fallback below is a guess.
 	for _i, slot in ipairs(result.slots or {}) do
-		if slot.id == slotId and slot.spacing ~= nil then
+		if slot.id == slotId and slot.spacing ~= nil
+			and slot.spacing[1] + slot.spacing[2] > 0.0 then
 			return slot.spacing[1] + slot.spacing[2], slot.spacing[3] + slot.spacing[4]
 		end
 	end
@@ -1189,10 +1448,13 @@ local function addConcourseSlots(result, streetResult, modules, allModules)
 					id = id,
 					transf = transf.mul(slot.transf,
 						transf.transl(vec3.new(0.0, -CONCOURSE_D * 0.5, 0.0))),
-					spacing = {
-						CONCOURSE_W * 0.5, CONCOURSE_W * 0.5,
-						CONCOURSE_D * 0.5, CONCOURSE_D * 0.5,
-					},
+					-- Nothing reserved, for the same reason as a support slot:
+					-- a concourse spans the entrance road on purpose, so it
+					-- overlaps the street entrance's own tile by design, and a
+					-- flat collision check cannot tell that from a mistake. Its
+					-- module sizes itself from `CONCOURSE_W/D` rather than from
+					-- this, so there is nothing to carry.
+					spacing = { 0.0, 0.0, 0.0, 0.0 },
 					type = CONCOURSE_TYPE,
 					replaceable = true,
 				}
@@ -1297,35 +1559,489 @@ end
 
 --- Placeholder art: one pier either side of the road, full height.
 ---
---- Deliberately **not** the support module's four-sided ring, which would wall
---- the road off, and deliberately small. Two things it has to respect:
+--- Deliberately **not** the support module's four-sided box, which would wall
+--- the road off. Two things it has to respect:
 ---
 ---  * it stays **strictly inside the cell**, because a seeded module's geometry
 ---    is present when the engine runs the placement collision check, so
 ---    anything that pokes out towards the kerb refuses the placement (see
----    `CONCOURSE_D`). One brick course is 4 m deep, so a single row anchored at
----    the back of a 6 m cell sits at y = -3 .. +1 and never leaves it;
+---    `CONCOURSE_D`). Each pier is a wall along y, inset by its own thickness,
+---    so it stands on the cell's edge rather than astride it - the brick is
+---    centred in x, and at `+-width/2` unrotated it hung 2.2 m over the side;
 ---  * the piers are at x = +-12, which clears the **16 m** entrance road
 ---    (`entrance_new.street_template`: lanes of 3, 5, 5, 3) by 4 m. Measuring
 ---    against the 10 m carriageway instead left them 2 m clear and on the
 ---    shoulder, which the engine refused - see `CONCOURSE_W`.
 ---
 --- It is a stand-in for the tunnel portal that is the real answer (`PLAN.md`
---- Phase 10 step 3), reusing the support brick so it lines up with whatever
---- supports stand next to it.
+--- Phase 10 step 3), reusing the support brick - and `brickWall`, so the piers
+--- are finished on both sides - so it lines up with whatever supports stand
+--- next to it.
 local function concourseModels(width, depth)
 	local models = {}
-	local courses = math.max(1, math.floor(PITCH / SUPPORT_BRICK_H + 0.5))
-	local y = -depth * 0.5
-	for _s, x in ipairs({ -width * 0.5, width * 0.5 }) do
-		for c = 0, courses - 1 do
-			models[#models + 1] = {
-				id = SUPPORT_BRICK,
-				transf = transf.transl(vec3.new(x, y, c * SUPPORT_BRICK_H)),
-			}
+	-- Inset along the cell's depth only. The piers' `x` is load-bearing - it is
+	-- what clears the 16 m road - and a wall running along y has no collider
+	-- overhang across its thickness, so x is already exact. Along y the pair of
+	-- twins did reach ~0.5 m past the cell ends; `fitSpan` pulls that in.
+	local d = fitSpan(depth)
+	local t = wallThickness(width, d)
+	local hw, hd = width * 0.5, d * 0.5
+
+	brickWall(models, -hw, -hw + t, -hd, hd, true)
+	brickWall(models, hw - t, hw, -hd, hd, true)
+	return models
+end
+
+--- Which modules have no slot to stand in, in **any** family?
+---
+--- The support-specific version of this is in `addSupportSlots`, and it was too
+--- narrow. The removal previews in the log show why: removing the street
+--- entrance takes the concourse slot with it, because that slot is derived from
+--- the entrance - the build reports `0 concourse slots` while the concourse
+--- module is still in `params.modules`. Removing the bus platform cascades to
+--- the entrance in street's own code and does the same. A module with no slot
+--- is one of the few configurations the engine can call invalid outright, so it
+--- belongs in the log by name for every family, not just for ours.
+---
+--- Logs one line either way, because "no orphans" is the interesting half when
+--- a removal has just been refused.
+local function logOrphanModules(result, modules)
+	local have = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		if slot.id ~= nil then have[slot.id] = true end
+	end
+	local orphans, names, total = 0, {}, 0
+	for id, _entry in pairs(modules or {}) do
+		total = total + 1
+		if type(id) == "number" and not have[id] then
+			orphans = orphans + 1
+			if #names < 6 then
+				local family = "street"
+				if id >= CONCOURSE_SLOT_BASE then
+					family = "ours/concourse"
+				elseif id >= SUPPORT_SLOT_BASE then
+					family = "ours/support"
+				elseif id < 20000000 then
+					family = "rail"
+				end
+				names[#names + 1] = tostring(id) .. " " .. family
+			end
 		end
 	end
-	return models
+	local line = "modules with no slot: " .. tostring(orphans) .. " of "
+		.. tostring(total)
+	if orphans > 0 then
+		line = line .. "; " .. table.concat(names, ", ")
+		log.warning(LOG .. line)
+	else
+		log.message(LOG .. line)
+	end
+	return orphans
+end
+
+--- Clips the **rail** level's reserved ground clear of the street level's.
+---
+--- This is the blunt end of a chain of findings, and it is worth writing the
+--- chain down because the conclusion looks reckless on its own.
+---
+---  1. The engine's module collision check is **flat** - height is not in it.
+---     Proven twice here: a rail station building at +12 was refused as
+---     colliding with the bus station at grade until `skipCollisionCheck` went
+---     on every slot type, and a support reserving ground under the deck it
+---     holds up made the whole station un-bulldozable.
+---  2. `skipCollisionCheck` does not reach the bulldozer. It is a `SlotConfig`
+---     field read by `UI::ModuleBuilder`; the refusal comes from
+---     `ModuleBulldozerAction.cpp`, which carries its own
+---     `Invalid Configuration, {count} Modules Will Collide`.
+---  3. So while any two occupied modules reserve overlapping ground, **no
+---     module in the construction can be removed** - the message is about the
+---     configuration, not about the module under the cursor.
+---  4. Zeroing our own slots was not enough, because the overlaps that remain
+---     are **stock against stock**: a rail passenger platform at +12, and the
+---     track beside it, against the bus platform at grade. Two decks stacked
+---     12 m apart is the entire point of this mod, so those overlaps are not a
+---     bug to fix - they are the design, seen by a check that cannot see
+---     height.
+---
+--- Every cross-level pair has a rail slot in it, so trimming the rail level's
+--- reservations is enough and the street level keeps its own.
+---
+--- Round seven: zeroing the rail level outright **cost the tracks**. A platform
+--- could still be bulldozed; a track could not, and the log says it was never
+--- even refused - not one `module remove slot=84...` line was written in a
+--- session of trying, so the engine never built a candidate configuration at
+--- all. A refusal previews and then does not commit, which is what the
+--- platforms did while the concourse was seeded. This was a miss: nothing
+--- under the cursor.
+---
+--- Which is what a zeroed reservation would do to a track and to nothing else,
+--- because a track module's geometry is one invisible model.
+--- `trackmodule.script.lua` emits a single `tn_underground_connection.mdl`, and
+--- that file is `collider = { type = "NONE" }`, has no mesh under its
+--- `RootNode`, and spans z -5 to -1: it is the person-network provider for the
+--- subway under the rails, not something a ray can hit. Everything a player
+--- sees of a track is the **edges**, and an edge carries no slot tag. So the
+--- only thing that can say "this track is under the cursor" is the slot
+--- rectangle - while a platform, which has a real mesh with a real collider,
+--- never needed it. One cause, and it predicts the asymmetry exactly as
+--- reported.
+---
+--- So: clip, do not zero. A rail slot keeps as much of its reservation as it
+--- can have without overlapping an occupied slot on the other level. The
+--- bulldozer's flat check finds nothing between the decks, and every slot still
+--- has a rectangle to be picked by. Four candidate cuts per obstacle, the
+--- cheapest by area wins, and a cut must leave the slot's own origin inside the
+--- rectangle: `spacing` is four distances measured from that origin, so a
+--- rectangle that does not contain it cannot be written back without inflating
+--- over the obstacle again.
+---
+--- Only **occupied** slots are touched. The check is over modules, so an empty
+--- slot cannot be half of a colliding pair, which means every slot a player has
+--- yet to build in keeps exactly the rectangle stock gave it.
+---
+--- What this does **not** touch: terrain alignment, the placement check against
+--- the world (that is geometry, not reservations), and street's own slots.
+
+--- A slot's reserved rectangle in construction space, from its live `spacing`.
+---
+--- `spacing` is `{left, right, back, front}` from the slot's origin, so the
+--- rectangle is not centred on it unless the halves match.
+local function slotFootprint(slot, xf)
+	local sp = slot.spacing
+	local t = xf ~= nil and transf.mul(xf, slot.transf) or slot.transf
+	local o = applyMat(t, { 0.0, 0.0, 0.0 })
+	local b = {
+		x0 = math.huge, x1 = -math.huge, y0 = math.huge, y1 = -math.huge,
+		ox = o[1], oy = o[2], z = o[3],
+		u = { t[1], t[2] }, v = { t[5], t[6] },
+	}
+	for _i, p in ipairs({ { -sp[1], -sp[3] }, { sp[2], -sp[3] },
+			{ sp[2], sp[4] }, { -sp[1], sp[4] } }) do
+		local c = applyMat(t, { p[1], p[2], 0.0 })
+		b.x0, b.x1 = math.min(b.x0, c[1]), math.max(b.x1, c[1])
+		b.y0, b.y1 = math.min(b.y0, c[2]), math.max(b.y1, c[2])
+	end
+	return b
+end
+
+--- `spacing` for a trimmed footprint: the four distances from the slot's own
+--- origin, along the slot's own axes, that span it.
+---
+--- Exact only while those axes are at a right angle to the construction's,
+--- which `trimReservations` checks before it clips anything.
+local function footprintSpacing(b)
+	local sp = { 0.0, 0.0, 0.0, 0.0 }
+	for _i, p in ipairs({ { b.x0, b.y0 }, { b.x1, b.y0 },
+			{ b.x1, b.y1 }, { b.x0, b.y1 } }) do
+		local dx, dy = p[1] - b.ox, p[2] - b.oy
+		local du = dx * b.u[1] + dy * b.u[2]
+		local dv = dx * b.v[1] + dy * b.v[2]
+		sp[1] = math.max(sp[1], -du)
+		sp[2] = math.max(sp[2], du)
+		sp[3] = math.max(sp[3], -dv)
+		sp[4] = math.max(sp[4], dv)
+	end
+	return sp
+end
+
+local RESERVATION_EPS = 0.001
+--- How much of a rectangle has to survive a cut for it to be worth having. A
+--- sliver is as good as nothing to pick a track by, and taking the whole width
+--- off one axis is what zeroing already does, more honestly.
+local RESERVATION_MIN = 1.0
+
+--- A shared edge is not an overlap: rail's own platform and track cells touch
+--- exactly at a 5 m pitch.
+local function footprintsOverlap(a, b)
+	return a.x0 < b.x1 - RESERVATION_EPS and a.x1 > b.x0 + RESERVATION_EPS
+		and a.y0 < b.y1 - RESERVATION_EPS and a.y1 > b.y0 + RESERVATION_EPS
+end
+
+--- The cheapest of the four single cuts that takes `b` clear of `obstacle`, or
+--- nil if none of them leaves a usable rectangle around the slot's origin.
+local function clipFootprint(b, obstacle)
+	local w, d = b.x1 - b.x0, b.y1 - b.y0
+	local cuts = {
+		{ "x1", obstacle.x0, obstacle.x0 - b.x0, w, d,
+			b.ox <= obstacle.x0 + RESERVATION_EPS },
+		{ "x0", obstacle.x1, b.x1 - obstacle.x1, w, d,
+			b.ox >= obstacle.x1 - RESERVATION_EPS },
+		{ "y1", obstacle.y0, obstacle.y0 - b.y0, d, w,
+			b.oy <= obstacle.y0 + RESERVATION_EPS },
+		{ "y0", obstacle.y1, b.y1 - obstacle.y1, d, w,
+			b.oy >= obstacle.y1 - RESERVATION_EPS },
+	}
+	local best, bestLoss = nil, math.huge
+	for _i, cut in ipairs(cuts) do
+		local remain, was, across, keepsOrigin = cut[3], cut[4], cut[5], cut[6]
+		local loss = (was - remain) * across
+		if keepsOrigin and remain >= RESERVATION_MIN and loss < bestLoss then
+			best, bestLoss = { cut[1], cut[2] }, loss
+		end
+	end
+	if best == nil then return nil end
+	local out = {}
+	for k, v in pairs(b) do out[k] = v end
+	out[best[1]] = best[2]
+	return out
+end
+
+local function trimReservations(result, railSlots, modules, xf)
+	local function occupied(slot)
+		local sp = slot.spacing
+		return sp ~= nil and (modules or {})[slot.id] ~= nil
+			and (sp[1] + sp[2] + sp[3] + sp[4]) > 0.0
+	end
+
+	-- What the other level reserves, as the engine sees it now. Our own slots
+	-- reserve nothing by construction, so they are never in this list.
+	local obstacles = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		if occupied(slot) and not (railSlots or {})[slot] then
+			obstacles[#obstacles + 1] = slotFootprint(slot, nil)
+		end
+	end
+
+	local original, clipped, zeroed, kept, example = {}, 0, 0, 0, nil
+	for _i, slot in ipairs(result.slots or {}) do
+		if occupied(slot) and (railSlots or {})[slot] then
+			local sp = slot.spacing
+			local b = slotFootprint(slot, xf)
+			-- Both families build their transforms out of `rotZ` and `transl`,
+			-- and `RAIL_XF` turns the rail level by 90 degrees, so a rail
+			-- slot's axes are the construction's axes swapped. If that ever
+			-- stops being true, zero the slot rather than write back four
+			-- distances that do not describe the rectangle they came from.
+			local square = math.min(math.abs(b.u[1]), math.abs(b.u[2]))
+				< RESERVATION_EPS
+			local fouled = false
+			for _j, obstacle in ipairs(obstacles) do
+				-- Same level means within a metre in z. An overlap down there
+				-- is a real bug, and trimming it away would only hide it.
+				if math.abs(b.z - obstacle.z) >= 1.0
+					and footprintsOverlap(b, obstacle) then
+					fouled = true
+					b = square and clipFootprint(b, obstacle) or nil
+					if b == nil then break end
+				end
+			end
+			if fouled then
+				original[slot] = sp
+				if b == nil then
+					slot.spacing = { 0.0, 0.0, 0.0, 0.0 }
+					zeroed = zeroed + 1
+				else
+					local to = footprintSpacing(b)
+					slot.spacing = to
+					clipped = clipped + 1
+					if example == nil then
+						example = string.format("%d %.1fx%.1f -> %.1fx%.1f",
+							slot.id, sp[1] + sp[2], sp[3] + sp[4],
+							to[1] + to[2], to[3] + to[4])
+					end
+				end
+			else
+				kept = kept + 1
+			end
+		end
+	end
+
+	local line = "trimmed the reserved ground on the rail level: "
+		.. tostring(clipped) .. " slot(s) clipped clear of the other level, "
+		.. tostring(zeroed) .. " zeroed because no single cut would do, "
+		.. tostring(kept) .. " untouched"
+	if example ~= nil then
+		line = line .. "; e.g. " .. example
+	end
+	line = line .. ". A clipped slot still has a rectangle for the bulldozer to"
+		.. " find a track by; a zeroed one does not, and a track has no other"
+		.. " geometry to be found by."
+	if zeroed > 0 then
+		log.warning(LOG .. line)
+	else
+		log.message(LOG .. line)
+	end
+	return original
+end
+
+--- Which **occupied** slots reserve the same ground, in construction space?
+---
+--- `Invalid configuration, N modules will collide` is an engine message, and it
+--- lives in `ModuleBulldozerAction.cpp` - the *bulldozer*, not the builder.
+--- That matches the symptom exactly: a support can be placed and then not
+--- removed again. Nothing in Lua is reachable from that check, so the only way
+--- to see what it sees is to compute the overlaps ourselves and read them off
+--- the log.
+---
+--- Rewritten 2026-10-12, because the first version's warning was an artefact
+--- that looked like an answer. It compared our own slots only, and read every
+--- `spacing` as axis-aligned in construction space. `RAIL_XF` rotates the rail
+--- level by 90 degrees, so a rail-derived slot's local x runs along
+--- construction **y** - and reading `spacing` the other way round turns a
+--- platform cell and the track cell beside it (5 m wide, 5 m apart, touching
+--- exactly) into a 2.8 m overlap. It reported 20 pairs on a four-tile station,
+--- which is exactly the 4 tiles x 5 cells of platform/track pairs and nothing
+--- else: all of it false.
+---
+--- So this version
+---
+---  * uses each slot's own axes rather than the construction's;
+---  * covers **all three** families, because our supports stand at grade under
+---    the rail deck and alongside the bus station, and a cross-family overlap
+---    was never tested at all. Rail's slots are still in rail's own frame when
+---    this runs - `liftRail` mutates them later, from the hook - so they get
+---    `RAIL_XF` applied here, which is also what puts them at z = 12;
+---  * counts **occupied** slots only. The message says *modules*, and an empty
+---    slot reserving ground is normal - rail emits `passenger_platform` and
+---    `track` for one cell at the same transform and the same rectangle
+---    (`modular_station.script.lua:559-560`), so a sweep over all slots can
+---    never be quiet;
+---  * splits same-level from cross-level pairs. A support at grade under a
+---    platform at +12 overlaps in plan **by design**; it is only a problem if
+---    the engine's check ignores height, and that is worth knowing separately
+---    from two things fouling each other at grade, which is a problem either
+---    way.
+---
+--- It always logs one line, including when it finds nothing: "the diagnostic
+--- ran and was quiet" and "the diagnostic did not run" are otherwise the same
+--- absence.
+local function slotBox(slot, xf, family, original)
+	-- The geometry wants the reservation as it was *before* `trimReservations`
+	-- took it away, because the diagnostic is about what the modules occupy.
+	local sp = (original or {})[slot] or slot.spacing
+	-- Our own slots reserve nothing on purpose, so measure what they *occupy*
+	-- instead - otherwise the diagnostic goes quiet about exactly the modules it
+	-- was written for.
+	local cell = supportCells[slot.id]
+	if cell ~= nil then
+		sp = { cell[1] * 0.5, cell[1] * 0.5, cell[2] * 0.5, cell[2] * 0.5 }
+	elseif slot.id >= CONCOURSE_SLOT_BASE then
+		sp = { CONCOURSE_W * 0.5, CONCOURSE_W * 0.5,
+			CONCOURSE_D * 0.5, CONCOURSE_D * 0.5 }
+	end
+	local t = xf ~= nil and transf.mul(xf, slot.transf) or slot.transf
+	-- `spacing` is `{left, right, back, front}` from the slot origin, so the
+	-- rectangle's centre is offset from it unless the halves match.
+	local c = applyMat(t, { (sp[2] - sp[1]) * 0.5, (sp[4] - sp[3]) * 0.5, 0.0 })
+	return {
+		id = slot.id,
+		type = slot.type,
+		family = family,
+		cx = c[1], cy = c[2], cz = c[3],
+		-- The slot's own axes in construction space, unit length: both families
+		-- build their transforms out of `rotZ` and `transl` alone.
+		u = { t[1], t[2] },
+		v = { t[5], t[6] },
+		hw = (sp[1] + sp[2]) * 0.5,
+		hd = (sp[3] + sp[4]) * 0.5,
+	}
+end
+
+--- Separating-axis test for two rectangles at any rotation.
+---
+--- A shared edge is not an overlap, which it must not be: rail's own columns
+--- touch exactly at a 5 m pitch, and so do our support cells along a tile.
+--- `d > r - eps` separates at `d == r`, and the epsilon keeps floating point
+--- from turning a shared edge into a 1e-13 overlap.
+local function boxesOverlap(a, b)
+	local eps = 0.001
+	local dx, dy = b.cx - a.cx, b.cy - a.cy
+	for _i, ax in ipairs({ a.u, a.v, b.u, b.v }) do
+		local d = math.abs(dx * ax[1] + dy * ax[2])
+		local ra = math.abs(a.u[1] * ax[1] + a.u[2] * ax[2]) * a.hw
+			+ math.abs(a.v[1] * ax[1] + a.v[2] * ax[2]) * a.hd
+		local rb = math.abs(b.u[1] * ax[1] + b.u[2] * ax[2]) * b.hw
+			+ math.abs(b.v[1] * ax[1] + b.v[2] * ax[2]) * b.hd
+		if d > ra + rb - eps then return false end
+	end
+	return true
+end
+
+local function describeBox(b)
+	return string.format("%d %s/%s (%.1f,%.1f,%.1f) %.1fx%.1f",
+		b.id, b.family, tostring(b.type), b.cx, b.cy, b.cz, b.hw * 2, b.hd * 2)
+end
+
+local function logSlotOverlaps(result, railSlots, xf, modules, original)
+	local boxes, live = {}, {}
+	for _i, slot in ipairs(result.slots or {}) do
+		local id = slot.id
+		if type(id) == "number" and slot.transf ~= nil and slot.spacing ~= nil
+			and (modules or {})[id] ~= nil then
+			local family, slotXf = "street", nil
+			if id >= OUR_SLOT_MIN then
+				family = "ours"
+			elseif (railSlots or {})[slot] then
+				family, slotXf = "rail", xf
+			end
+			boxes[#boxes + 1] = slotBox(slot, slotXf, family, original)
+			-- And the same slot again at the size the engine can *see* it,
+			-- which after `trimReservations` is not the size it occupies. A
+			-- trimmed rail slot is still visible, just smaller, so the
+			-- `visible` flag alone no longer answers the question that matters:
+			-- whether two rectangles the engine holds still overlap.
+			local sp = slot.spacing
+			if sp[1] + sp[2] + sp[3] + sp[4] > 0.0 then
+				live[#live + 1] = slotBox(slot, slotXf, family, nil)
+			end
+		end
+	end
+
+	-- Same level means within a metre in z: the two decks are 12 m apart, so
+	-- there is nothing in between to be ambiguous about.
+	local same, cross, reserved, examples = 0, 0, 0, {}
+	for i = 1, #boxes do
+		for j = i + 1, #boxes do
+			local a, b = boxes[i], boxes[j]
+			if boxesOverlap(a, b) then
+				local dz = math.abs(a.cz - b.cz)
+				local level = dz < 1.0 and "same" or "cross"
+				if level == "same" then same = same + 1 else cross = cross + 1 end
+				if examples[level] == nil then
+					examples[level] = describeBox(a) .. " vs " .. describeBox(b)
+						.. string.format(" dz=%.1f", dz)
+				end
+			end
+		end
+	end
+
+	-- What is left for the engine to call a collision: the live rectangles,
+	-- after trimming, against each other.
+	for i = 1, #live do
+		for j = i + 1, #live do
+			local a, b = live[i], live[j]
+			if boxesOverlap(a, b) then
+				reserved = reserved + 1
+				if examples.reserved == nil then
+					examples.reserved = describeBox(a) .. " vs " .. describeBox(b)
+						.. string.format(" dz=%.1f", math.abs(a.cz - b.cz))
+				end
+			end
+		end
+	end
+
+	local line = "occupied slot overlaps: " .. tostring(same)
+		.. " at the same level, " .. tostring(cross) .. " across levels, out of "
+		.. tostring(#boxes) .. " modules; " .. tostring(reserved)
+		.. " pair(s) of reserved rectangles still overlap after trimming, out of "
+		.. tostring(#live) .. " that reserve any"
+	if examples.reserved ~= nil then
+		line = line .. "; reserved: " .. examples.reserved
+	end
+	if examples.same ~= nil then
+		line = line .. "; same: " .. examples.same
+	end
+	if examples.cross ~= nil then
+		line = line .. "; cross: " .. examples.cross
+	end
+	-- `reserved` is the number that matters now: an overlap the engine cannot
+	-- see cannot be the collision it refuses a removal over.
+	if reserved > 0 then
+		log.warning(LOG .. line)
+	else
+		log.message(LOG .. line)
+	end
+	return same, cross, reserved
 end
 
 --------------------------------------------------------------------------------
@@ -1687,30 +2403,27 @@ local function finish(result, streetResult, railResult, modules)
 					position = { 0.0, 0.0, 0.0 },
 					radius = 175,
 				}
-				-- Two quite different causes, and the message used to name only
-				-- the second, which sent a debugging session the wrong way:
+				-- Since no station building is seeded any more, this has one
+				-- expected cause and one real one, and the `concourse:` line
+				-- for the same rebuild tells them apart:
 				--
-				--  1. the station legitimately has no catchment-bearing module
-				--     right now, because the player removed the last building.
-				--     Seen in a real session after deleting a platform, which
-				--     moves the building slot ids - they are derived from
-				--     `minS[j]`, the lowest occupied column in each row
-				--     (`modular_station.script.lua:688`) - and so orphans the
-				--     building module that was sitting in one. Stock behaviour,
-				--     and the fallback is doing exactly its job;
-				--  2. `MAIN_BUILDING_SLOT` is not landing in a real slot, which
-				--     would mean the seeding is wrong - most likely after a
-				--     game update.
+				--  1. no concourse is placed, because the player removed it and
+				--     put nothing else up. The fallback is doing its job and
+				--     the station keeps working. There is no `concourse:` line;
+				--  2. a concourse *is* placed and its numbers did not reach the
+				--     station records - `applyConcourse` found the slot and the
+				--     station list did not line up with it. That is a bug here,
+				--     not a player choice. There is a `concourse:` line and
+				--     this warning as well.
 				--
-				-- They are told apart by whether the `support footprints:` line
-				-- for the same rebuild still mentions a `rail_building_*` slot.
+				-- Both cases used to be reachable a third way, through the
+				-- seeded building's slot id drifting after a game update. That
+				-- is gone with the seeding.
 				log.warning(LOG .. "a station had no catchment of its own -"
-					.. " falling back to a default. Expected when there is no"
-					.. " concourse module placed (see the 'concourse:' line for"
-					.. " this rebuild); otherwise either no catchment-bearing"
-					.. " stock module is placed, or MAIN_BUILDING_SLOT has"
-					.. " stopped landing in a real slot - which would be a"
-					.. " seeding bug, most likely after a game update.")
+					.. " falling back to a default. Expected when no concourse"
+					.. " is placed; if the 'concourse:' line for this rebuild"
+					.. " says one was applied, then its catchment did not reach"
+					.. " this station and that is a bug.")
 			end
 
 			station.pool = station.pool or { edges = {} }
@@ -1792,9 +2505,33 @@ return {
 	--- The support module's geometry. Drawn into the construction level, which
 	--- is street's own table and therefore stays at grade - these must not be
 	--- lifted with the level they hold up.
+	---
+	--- The `support draw:` line is here because "the geometry does not coincide
+	--- with the slot" has three possible causes and they are not
+	--- distinguishable on screen: the cell read back is wrong (a fallback
+	--- `5.0x8.0` means `supportCell` did not find the slot at all), the frame
+	--- is wrong (`addModel` multiplies by `result.slots[i].transf`, so this is
+	--- the slot's own transform - if its translation is not at grade under the
+	--- platform, the slot is misplaced, not the art), or the art does not fill
+	--- the frame it is given, which is the only one the models can be blamed
+	--- for. Deduped on the whole line, so it costs one line per distinct cell.
+	---
+	--- `drawn` is the envelope of what was emitted, colliders included
+	--- (`drawnExtent`). It has to come out **smaller** than `cell` by about
+	--- `2 * SUPPORT_MARGIN` in each direction; bigger than `cell` means geometry
+	--- is reaching into the neighbouring cell, which is what the bulldozer
+	--- refuses a removal over.
 	supportUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
 		local w, d = supportCell(result, slotId)
-		for _i, m in ipairs(supportModels(w, d)) do
+		local models = supportModels(w, d)
+		local dw, dd = drawnExtent(models)
+		local t = transform
+		logSupportDraw(string.format(
+			"slot=%d cell=%.1fx%.1f drawn=%.1fx%.1f at (%.1f,%.1f,%.1f) xAxis=(%.2f,%.2f)",
+			slotId, w, d, dw, dd,
+			t and t[13] or 0.0, t and t[14] or 0.0, t and t[15] or 0.0,
+			t and t[1] or 0.0, t and t[2] or 0.0))
+		for _i, m in ipairs(models) do
 			addModel(m.id, m.transf, tag, result.models)
 		end
 	end,
@@ -2052,6 +2789,13 @@ return {
 			params.modules)
 		local concourses = addConcourseSlots(result, streetResult, streetModules,
 			params.modules)
+		-- Must be after `addSupportSlots`, which sizes supports from the rail
+		-- slots' reservations, and before the diagnostic, which takes the
+		-- originals so it can still report what the modules occupy.
+		local reservations = trimReservations(result, railSlots, params.modules,
+			RAIL_XF)
+		logSlotOverlaps(result, railSlots, RAIL_XF, params.modules, reservations)
+		logOrphanModules(result, params.modules)
 
 		-- Run-once guard. Everything in the hook is a **mutation** of tables the
 		-- engine already holds - the rail level is lifted in place - so a second

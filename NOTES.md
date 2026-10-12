@@ -577,6 +577,119 @@ Two rules follow:
   space has nothing to collide with. Snapping to an existing road is the test.
 
 
+## A model's collider is not its mesh, and it is the collider that collides
+
+**Measured 2026-10-12.** Every `.mdl` may declare a `collider`, and it is a
+plain box that need not agree with the geometry it belongs to. Reading it is
+free - the `.mdl` is Lua text inside the content zip:
+
+```python
+import zipfile
+z = zipfile.ZipFile(r"...\base\content\infrastructure\bridge.zip")
+print(z.read("bridge/stone/stone_abut_rep_rep.mdl").decode())
+```
+
+`stone_abut_rep_rep.mdl`, the stone bridge abutment piece:
+
+```lua
+boundingInfo = { bbMin = { -2.21521, 0, 0 }, bbMax = { 2.216, 4, 2 } },
+collider = { type = "BOX", params = { halfExtents = { 1.71561, 2, 1 } },
+             transf = { ..., 1.20039, 2, 1, 1 } },
+```
+
+The mesh is centred in x; the collider is **not** - it covers
+`x = -0.52 .. 2.92` against a mesh of `x = -2.22 .. 2.22`, so it reaches 0.70 m
+past the piece on one side and stops 1.70 m short on the other. `pillar_rep_rep`
+is offset too, differently: its collider is centred on the model origin while
+its mesh sits in the `+y, +z` octant, so the collider hangs behind and below the
+pillar. Assume nothing; read the file.
+
+Why it matters: the module collision checks are against **geometry**, so a
+scaled model puts a scaled collider into the world, and a module whose
+brickwork sits neatly inside its slot can still be colliding. Scaling makes the
+error grow - a collider offset by a fraction `f` of the piece overhangs a tile
+scaled to `step` metres by `step * f`.
+
+Two consequences worth carrying to any mod that draws scaled stock art:
+
+- **Clearance has to be measured against the collider, not the mesh.** The mesh
+  is what is visible and it is the wrong thing to fit to the slot.
+- **Insetting by a fixed amount does not buy a fixed clearance**, because the
+  overhang is a fraction of what is left after the inset. Solve for it:
+  `span * (1 + 2 * overhang / tiles) = cell - 2 * margin`. See
+  `multi-layer-stations`, `fitSpan`.
+
+
+## A slot stacked over another one reserves no ground
+
+Stock's answer to a module that sits above an occupied slot is
+`spacing = { 0, 0, 0, 0 }`. The platform roof and platform addon slots do
+exactly that (`rail/modular_station/modular_station.script.lua:567-612`) while
+the platform slot under them reserves
+`{ platformWidth/2, platformWidth/2, platformLength/2 - 0.5, ... }`. They also
+carry `result.dependentSlots[platformId] = { roofId, addonId }`, so removing the
+platform takes its roof with it rather than orphaning it.
+
+**The module collision check is flat - height is not in it.** Proven twice in
+`multi-layer-stations`, from both directions: a rail station building at +12 was
+refused as colliding with the bus station at **grade**, and highlighted it as
+the obstruction, until `skipCollisionCheck` was set on every slot type; and once
+a support module reserved ground at grade under the deck it holds up, **no
+module in the construction could be bulldozed at all** - the bulldozer runs its
+own copy of the check (`ModuleBulldozerAction.cpp`) and `SlotConfig` does not
+reach it. Placing works and removing does not, which is a reliable signature of
+this.
+
+So the slot rectangle is not the place to express "this thing is above that
+thing" - a zero reservation is, and the stacking relationship goes in
+`dependentSlots`. A module that sizes itself from its own `spacing` needs
+another source once that is zero. Note also that neighbouring platform slots **touch exactly**
+at a 5 m pitch, so a shared edge is clearly not a collision as far as the engine
+is concerned.
+
+**But `spacing` is also what the cursor picks a slot by, so do not zero it on a
+slot a player has to be able to click.** `spacing` is write-only from *Lua* -
+nothing in `rail.zip` or `street.zip` reads it back - which is not the same as
+unused: the engine reads it, and at least two things it reads it for are the
+collision check and finding the slot under the cursor. Zeroing the reservation
+on every occupied rail slot in `multi-layer-stations` left the platforms
+selectable (they have a real mesh with a real collider) and the **tracks not**,
+because a track module has nothing else to be found by (next section). The
+answer is to **clip, not zero**: shrink the rectangle until it no longer
+overlaps the other level's, which satisfies the flat collision check and still
+leaves something to click. `spacing` is `{left, right, back, front}` from the
+slot origin, so any asymmetric axis-aligned rectangle *containing the origin*
+can be written back exactly; one that does not contain the origin cannot, and
+will silently inflate back over the obstacle.
+
+
+## A track module has no geometry to click - its slot rectangle is all there is
+
+`rail/modular_station/trackmodule.script.lua` emits exactly **one** model,
+`/stations/rail/era_a/tn_underground_connection.mdl`, and that file is
+
+  * `collider = { type = "NONE" }`,
+  * a single `RootNode` with no mesh under it,
+  * `bbMin.z = -5`, `bbMax.z = -1` - entirely below ground.
+
+It is the `transportNetworkProvider` for the pedestrian subway under the rails,
+not something a ray can hit. Everything a player sees of a station track is the
+**edges** that `trainstationutil.makeTrack` appends to an edge list, and an edge
+carries no `__module_<slotId>` tag. So the only thing left that can tell the
+engine "this track is the slot under the cursor" is the slot's reserved
+rectangle.
+
+Consequence for any mod that manipulates `spacing`: a track slot whose
+reservation is gone cannot be selected, bulldozed or replaced, while every
+module with real geometry still can. The log tells the two failures apart
+without guessing:
+
+  * **refused** - `updateFn` runs with the module gone (a preview), and the
+    removal is then not committed. The engine found the slot and rejected the
+    configuration.
+  * **missed** - `updateFn` never runs at all, so there is no preview line for
+    that slot id anywhere in the session. The engine never found a slot.
+
 ## Several `station` records in one construction join one StationGroup
 
 **Confirmed in-game 2026-10-09** with `multi-layer-stations`, whose two levels
@@ -843,6 +956,47 @@ uses metaconstructions at all** - there is no `metacon.lua` anywhere in
 When the Teal definitions and the shipped `.con.lua` / `.script.lua` disagree,
 the shipped content wins. See `external-connections/NOTES.md` for a table of
 further cases that each cost a restart.
+
+
+## The engine's own strings are readable, and they say where a check lives
+
+`TransportFever3.exe` is built with assert strings intact, and they carry the
+source path and the enclosing function name. Grepping the binary for printable
+runs therefore locates engine behaviour that no amount of Lua reading can:
+
+```python
+import re
+d = open('TransportFever3.exe', 'rb').read()
+for m in re.finditer(rb'[\x20-\x7e]{8,250}', d):
+    s = m.group(0).decode()
+    if 'Collide' in s:
+        print(m.start(), s)
+```
+
+Strings cluster by translation unit, so a hit's neighbours are the rest of that
+file's messages and asserts. That is what makes it useful: the message and the
+code path come out together.
+
+Worked example - `Invalid Configuration, {count} Modules Will Collide`, the
+tooltip that refuses a module edit. Its neighbours are
+`...\src\Game\UI\Actions\bulldozer\ModuleBulldozerAction.cpp`,
+`` `anonymous-namespace'::FindSlotToRemove ``, `ModuleBulldozerAction failed`,
+`Protected - Cannot Be Bulldozed` and `Construction Not Possible`. So it is a
+**bulldozer** check, in the file that removes modules - not the builder that
+adds them, whose own collision pass is `UI::ModuleBuilder::RecheckCollisions` in
+`ModuleBuilder.cpp`. A configuration the builder accepts can therefore be
+refused by the bulldozer, which is exactly the shape of
+`multi-layer-stations`'s "a support can be placed and then not removed".
+
+What is *not* there is any route into it from Lua. `skipCollisionCheck` appears
+once, in the scripting bindings, and the only collision helpers exposed are
+`construction_util::CheckCollisionContours` and
+`CheckTerrainAlignmentCollision` - both construction-against-world, not
+module-against-module. So the only way to see what that check sees is to
+compute the overlaps in the script and log them.
+
+The message is **not** in `locale/en.lang.lua`, and nor are the other engine
+tooltips - do not conclude from a miss there that a string is not the engine's.
 
 
 ## A deployed mod still has to be activated per savegame
