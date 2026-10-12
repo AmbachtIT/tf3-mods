@@ -862,7 +862,15 @@ on that very station.
 
 ## A support can be placed and not removed
 
-Open. What is established, 2026-10-12:
+> **Closed, 2026-10-12.** Two causes, found in this order and neither of them
+> the supports: a **seeded concourse** (rounds five and six) and then the
+> **zeroed slot reservations** that had been added while chasing it, which cost
+> the tracks their only pickable geometry (round seven). Confirmed in game:
+> tracks and platforms both delete, re-add and delete again. The reading below
+> is kept because every step of it still holds - it is only the conclusion that
+> pointed at the wrong module.
+
+What was established, 2026-10-12:
 
 **The message is the bulldozer's.** `Invalid configuration, N modules will
 collide` comes from `ModuleBulldozerAction.cpp`, not from the builder - see the
@@ -1242,6 +1250,10 @@ catchment with a line in the log.
 
 
 ## Round seven: the platforms came back, and the tracks were the bill for it
+
+> **Confirmed in game, 2026-10-12.** Tracks and platforms both delete; both can
+> be re-added and deleted again. The whole arc that started with "a support can
+> be placed and not removed" is closed, and the supports were never in it.
 
 **2026-10-12, 19:43 session.** Unseeding the concourse worked: platforms are
 removable again. Round six's A/B answered step 1 in the affirmative on the first
