@@ -57,7 +57,7 @@ GAME_GLOBALS = {
 
 DEF_RE = re.compile(r"\blocal\s+function\s+([A-Za-z_]\w*)|\blocal\s+([A-Za-z_]\w*)\s*=")
 CALL_RE = re.compile(r"(?<![\w.:])([A-Za-z_]\w*)\s*\(")
-PARAMS_RE = re.compile(r"function\s*(?:[A-Za-z_][\w.:]*)?\s*\(([^)]*)\)")
+PARAMS_RE = re.compile(r"\bfunction\s*(?:[A-Za-z_][\w.:]*)?\s*\(([^)]*)\)")
 #: SCREAMING_CASE identifiers read as values, e.g. `{ id = DECK }`.
 CONST_RE = re.compile(r"(?<![\w.:])([A-Z][A-Z0-9_]{2,})(?!\s*=[^=])(?![\w(])")
 LUA_KEYWORDS = frozenset((

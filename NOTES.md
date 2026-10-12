@@ -647,7 +647,20 @@ another source once that is zero. Note also that neighbouring platform slots **t
 at a 5 m pitch, so a shared edge is clearly not a collision as far as the engine
 is concerned.
 
-**But `spacing` is also what the cursor picks a slot by, so do not zero it on a
+**An empty slot with no reserved ground cannot be clicked at all**, which is
+the harder half of this. An *occupied* slot has the module's own geometry to be
+found by - that is why zeroing the reservation cost the tracks and nothing else
+(next section), since a track module draws nothing. An **empty** slot has only
+its rectangle: nothing is drawn there yet. Zero it and the slot is in
+`result.slots` every rebuild, reports `occupied=false` in your own log, and is
+simply not offered in the game. Stock gets away with `{ 0, 0, 0, 0 }` on its
+roof and addon slots because it also lists them in
+`result.dependentSlots[platformId]`, so the player reaches them *through* the
+platform slot under them; take the zero without that second half and the slot is
+unreachable. So: zero a reservation only on an **occupied** slot whose module
+has real geometry, or pair the zero with `dependentSlots`.
+
+**And `spacing` is what the cursor picks a slot by, so do not zero it on a
 slot a player has to be able to click.** `spacing` is write-only from *Lua* -
 nothing in `rail.zip` or `street.zip` reads it back - which is not the same as
 unused: the engine reads it, and at least two things it reads it for are the

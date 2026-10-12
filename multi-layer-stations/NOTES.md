@@ -1045,10 +1045,11 @@ first.
 
 ## Round four: a support slot must reserve no ground
 
-> **Superseded in part by "Round seven".** Our own slots still reserve nothing -
-> that part stands, and stock does the same for a stacked slot. Extending it to
-> stock's *rail* slots did not fix anything and cost the tracks their only
-> pickable geometry; those are clipped now, not zeroed.
+> **Superseded by "Round seven" and "Round eight".** None of this held up.
+> Extending the zero to stock's *rail* slots fixed nothing and cost the tracks
+> their only pickable geometry; zeroing **our own** slots made them impossible
+> to place into, because an empty slot has no geometry and the rectangle is all
+> it has. Reservations are trimmed now, not wiped, and only on occupied slots.
 
 **2026-10-12, after the clearance fix.** The report that settles the shape of
 the problem: *"I can't delete any station modules after placing a support."*
@@ -1332,6 +1333,77 @@ after trimming, out of M that reserve any`, and the geometry half of the line -
 `same` and `cross` - still reports what the modules *occupy*, which is the honest
 number for a mod whose entire point is two decks 12 m apart.
 
+## Round eight: an empty slot with no reserved ground is not offered at all
+
+**2026-10-12.** *"I can't place the concourse - there is no module slot
+available."* The log had been saying `concourse slots 24x6: 820015500@(0.0,-18.0)
+occupied=false` on every rebuild since the slot was written, which is exactly the
+line that was put there to separate "the slot is not there" from "the slot is
+there and the placement is refused". It was the third case, which that line
+cannot tell apart from the second: the slot is there and **cannot be clicked**.
+
+Same cause as the tracks, one step further. A track module has no geometry, so
+an occupied track slot needs its rectangle to be picked by. An **empty** slot of
+any kind has no geometry *by definition* - nothing is drawn where nothing has
+been built - so its rectangle is the only thing it can ever be found by. Both
+our slot kinds declared `spacing = { 0, 0, 0, 0 }`, so neither could be placed
+into. That also explains a silence nobody had read as evidence: after round four
+zeroed the support slots, the next two sessions logged `support=0`. No supports
+were placed because none *could* be.
+
+Stock gets away with the zero on its roof and addon slots because it pairs it
+with `result.dependentSlots[platformId] = { roofId, addonId }`: the player
+reaches those slots through the platform slot under them. We took the first half
+of the idiom and not the second, three rounds ago, on the reasoning that the
+reservation was what made the station un-bulldozable - which it was not.
+
+So our slots carry their real cell again - `width x cellD` for a support,
+`CONCOURSE_W x CONCOURSE_D` for a concourse - and the collision argument that
+the zero was for is handled where it actually applies. The engine's check is
+over **modules**, so it can only see a slot that is occupied, and an occupied
+slot is one whose module is standing there to be clicked. `trimReservations`
+therefore runs in two passes, in priority order:
+
+| pass | trims | clear of | levels |
+| --- | --- | --- | --- |
+| 1 | rail slots | occupied street slots | across levels only |
+| 2 | our slots | occupied street **and** rail slots | any level |
+
+Street is never trimmed; it is at grade, it is stock, and it was there first.
+Rail yields only across levels, because two decks 12 m apart overlap by design
+and two things at grade do not - trimming a same-level overlap away would hide a
+real bug. Ours yield at any level, because every overlap they have is deliberate:
+a support stands under the deck it holds up, and a concourse spans the entrance
+road. Ours are not trimmed against each other; support cells touch exactly at
+their pitch, which is not an overlap, and a concourse fouling a support is a
+layout question that should stay visible in the diagnostic.
+
+Checked offline against the logged geometry, in the same frame the engine sees:
+
+| slot | before | after |
+| --- | --- | --- |
+| rail platform / track, clear of the bus station | 5.0 x 39.0 | untouched |
+| rail platform / track over the bus platform | 5.0 x 39.0 | 5.0 x 29.5, cut at the bus station's edge |
+| occupied support under the deck | 5.0 x 7.8 | zeroed - no cut leaves a rectangle, and its brickwork is what the cursor finds |
+| occupied support clear of everything | 5.0 x 7.8 | untouched |
+| occupied concourse across the entrance tile | 24.0 x 6.0 | zeroed, same reason |
+| **any empty slot** | - | **untouched, always** |
+
+The last row is the whole point. `trimReservations` only ever looks at occupied
+slots, so every slot a player still has to click keeps the rectangle stock gave
+it, or the one we gave it.
+
+### A sharper test than any of this
+
+`tools/luacheck.py` had been running with `PARAMS_RE` broken since it was
+written: the pattern started with a literal `\x08` instead of `\b`, a backslash
+eaten on the way into the file (see root `NOTES.md` on writing text through a
+heredoc). The practical effect is that **no function parameter has ever counted
+as defined**, so every call to a callback's own argument read as a missing
+local. It went unnoticed because the known cases were hard-listed in
+`GAME_GLOBALS` with a comment saying `PARAMS_RE` was meant to cover them.
+Repaired, and both mods check clean.
+
 ## Open questions
 
 - ~~Does zeroing the slot reservations restore module removal?~~ **No -
@@ -1350,8 +1422,9 @@ number for a mod whose entire point is two decks 12 m apart.
   refusal follows the tag or the geometry.
 - **Should support slots be `dependentSlots` of the rail module above?** Stock
   pairs a roof slot with its platform that way, and it is the half of the idiom
-  this mod does not implement: removing a platform orphans its supports instead
-  of taking them with it. Appending rather than replacing matters - rail already
+  this mod does not implement - twice over now: removing a platform orphans its
+  supports instead of taking them with it, and it is also what lets stock get
+  away with `spacing = { 0, 0, 0, 0 }` on a stacked slot (round eight). Appending rather than replacing matters - rail already
   uses `dependentSlots[platformId]` for the roof and addon.
 
 - ~~Do two station records in one construction join one StationGroup?~~

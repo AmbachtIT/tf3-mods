@@ -1030,28 +1030,30 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 				result.slots[#result.slots + 1] = {
 					id = SUPPORT_SLOT_BASE + slot.id * 10 + k,
 					transf = base,
+					-- The cell this support fills, as reserved ground.
 					-- Symmetric, because the offset is already baked into the
-					-- transform above. The module reads this to size itself.
-					-- **No reserved ground**, which is what stock does for a slot
-					-- stacked over another one: the platform roof and addon
-					-- slots sit above an occupied platform slot and declare
-					-- `spacing = { 0, 0, 0, 0 }`
-					-- (`modular_station.script.lua:567-612`) while the platform
-					-- under them reserves its full tile.
+					-- transform above.
 					--
-					-- The reason is that the engine's module collision check is
-					-- **flat**: it was already proven here, from the other
-					-- direction, when a rail station building at +12 was refused
-					-- as colliding with the bus station at grade and
-					-- `skipCollisionCheck` was the fix (see the merge in
-					-- `mergeResults`). A support reserving ground directly under
-					-- the deck it holds up is therefore a collision by
-					-- construction, and `skipCollisionCheck` does not reach the
-					-- bulldozer's own copy of the check - which is why nothing
-					-- in the station can be removed once a support exists.
+					-- This was `{ 0, 0, 0, 0 }` for three rounds, on stock's
+					-- idiom for a slot stacked over another one: the platform
+					-- roof and addon slots sit above an occupied platform slot
+					-- and declare exactly that
+					-- (`modular_station.script.lua:567-612`). The idiom has a
+					-- second half this mod does not implement - those slots are
+					-- listed in `dependentSlots` of the platform under them -
+					-- and without it a zero reservation is **a slot the player
+					-- cannot click**. The concourse slot proved it: there in
+					-- the log every rebuild, `occupied=false`, and no module
+					-- slot offered in the game. A rectangle is the only thing
+					-- an *empty* slot has to be found by, because nothing is
+					-- drawn there yet.
 					--
-					-- The module reads `supportCells` for its size instead.
-					spacing = { 0.0, 0.0, 0.0, 0.0 },
+					-- The flat collision check the zero was for is only over
+					-- **modules**, so `trimReservations` takes the reservation
+					-- away again once something is standing here - by which
+					-- time the module's own brickwork is what the cursor finds.
+					spacing = { width * 0.5, width * 0.5,
+						cellD * 0.5, cellD * 0.5 },
 					type = SUPPORT_TYPE,
 					replaceable = true,
 				}
@@ -1448,13 +1450,16 @@ local function addConcourseSlots(result, streetResult, modules, allModules)
 					id = id,
 					transf = transf.mul(slot.transf,
 						transf.transl(vec3.new(0.0, -CONCOURSE_D * 0.5, 0.0))),
-					-- Nothing reserved, for the same reason as a support slot:
-					-- a concourse spans the entrance road on purpose, so it
-					-- overlaps the street entrance's own tile by design, and a
-					-- flat collision check cannot tell that from a mistake. Its
-					-- module sizes itself from `CONCOURSE_W/D` rather than from
-					-- this, so there is nothing to carry.
-					spacing = { 0.0, 0.0, 0.0, 0.0 },
+					-- The concourse cell, as reserved ground - without which
+					-- there is nothing to click to place one (see the support
+					-- slot above, which is where that was learned the hard
+					-- way). A concourse spans the entrance road on purpose, so
+					-- this does overlap the street entrance's own tile by
+					-- design; `trimReservations` takes it away again once a
+					-- concourse is standing in it, and by then the concourse
+					-- itself is what the cursor finds.
+					spacing = { CONCOURSE_W * 0.5, CONCOURSE_W * 0.5,
+						CONCOURSE_D * 0.5, CONCOURSE_D * 0.5 },
 					type = CONCOURSE_TYPE,
 					replaceable = true,
 				}
@@ -1786,81 +1791,102 @@ local function clipFootprint(b, obstacle)
 	return out
 end
 
+--- Who yields to whom.
+---
+--- Street is never trimmed: it is at grade, it is stock, and it was here first.
+--- Rail yields to street, but only **across levels** - two decks 12 m apart
+--- overlap by design, two things at grade do not, and trimming a same-level
+--- overlap away would hide a real bug. Our own slots yield to both at **any**
+--- level, because every overlap they have is deliberate: a support stands under
+--- the deck it holds up and alongside the bus station, and a concourse spans
+--- the entrance road.
+---
+--- Ours are not trimmed against each other. Support cells touch exactly at
+--- their pitch, which is not an overlap, and if a concourse and a support ever
+--- do foul each other that is a layout question, not something to paper over -
+--- `logSlotOverlaps` reports it as a same-level pair.
 local function trimReservations(result, railSlots, modules, xf)
 	local function occupied(slot)
 		local sp = slot.spacing
-		return sp ~= nil and (modules or {})[slot.id] ~= nil
+		return sp ~= nil and type(slot.id) == "number"
+			and (modules or {})[slot.id] ~= nil
 			and (sp[1] + sp[2] + sp[3] + sp[4]) > 0.0
 	end
-
-	-- What the other level reserves, as the engine sees it now. Our own slots
-	-- reserve nothing by construction, so they are never in this list.
-	local obstacles = {}
-	for _i, slot in ipairs(result.slots or {}) do
-		if occupied(slot) and not (railSlots or {})[slot] then
-			obstacles[#obstacles + 1] = slotFootprint(slot, nil)
-		end
-	end
+	local function isRail(slot) return (railSlots or {})[slot] ~= nil end
+	local function isOurs(slot) return slot.id >= OUR_SLOT_MIN end
+	local function frameOf(slot) return isRail(slot) and xf or nil end
 
 	local original, clipped, zeroed, kept, example = {}, 0, 0, 0, nil
-	for _i, slot in ipairs(result.slots or {}) do
-		if occupied(slot) and (railSlots or {})[slot] then
-			local sp = slot.spacing
-			local b = slotFootprint(slot, xf)
-			-- Both families build their transforms out of `rotZ` and `transl`,
-			-- and `RAIL_XF` turns the rail level by 90 degrees, so a rail
-			-- slot's axes are the construction's axes swapped. If that ever
-			-- stops being true, zero the slot rather than write back four
-			-- distances that do not describe the rectangle they came from.
-			local square = math.min(math.abs(b.u[1]), math.abs(b.u[2]))
-				< RESERVATION_EPS
-			local fouled = false
-			for _j, obstacle in ipairs(obstacles) do
-				-- Same level means within a metre in z. An overlap down there
-				-- is a real bug, and trimming it away would only hide it.
-				if math.abs(b.z - obstacle.z) >= 1.0
-					and footprintsOverlap(b, obstacle) then
-					fouled = true
-					b = square and clipFootprint(b, obstacle) or nil
-					if b == nil then break end
-				end
+
+	-- `pick` chooses the slots to trim, `block` the occupied slots they must
+	-- stay clear of. Obstacles are read at the start of the pass, so a later
+	-- pass sees what an earlier one already trimmed.
+	local function pass(pick, block, crossOnly)
+		local obstacles = {}
+		for _i, slot in ipairs(result.slots or {}) do
+			if occupied(slot) and block(slot) then
+				obstacles[#obstacles + 1] = slotFootprint(slot, frameOf(slot))
 			end
-			if fouled then
-				original[slot] = sp
-				if b == nil then
-					slot.spacing = { 0.0, 0.0, 0.0, 0.0 }
-					zeroed = zeroed + 1
-				else
-					local to = footprintSpacing(b)
-					slot.spacing = to
-					clipped = clipped + 1
-					if example == nil then
-						example = string.format("%d %.1fx%.1f -> %.1fx%.1f",
-							slot.id, sp[1] + sp[2], sp[3] + sp[4],
-							to[1] + to[2], to[3] + to[4])
+		end
+
+		for _i, slot in ipairs(result.slots or {}) do
+			if occupied(slot) and pick(slot) then
+				local sp = slot.spacing
+				local b = slotFootprint(slot, frameOf(slot))
+				-- Both families build their transforms out of `rotZ` and
+				-- `transl`, and `RAIL_XF` turns the rail level by 90 degrees,
+				-- so a slot's axes are the construction's axes swapped at
+				-- worst. If that ever stops being true, zero the slot rather
+				-- than write back four distances that do not describe the
+				-- rectangle they came from.
+				local square = math.min(math.abs(b.u[1]), math.abs(b.u[2]))
+					< RESERVATION_EPS
+				local fouled = false
+				for _j, obstacle in ipairs(obstacles) do
+					-- Same level means within a metre in z.
+					if (not crossOnly or math.abs(b.z - obstacle.z) >= 1.0)
+						and footprintsOverlap(b, obstacle) then
+						fouled = true
+						b = square and clipFootprint(b, obstacle) or nil
+						if b == nil then break end
 					end
 				end
-			else
-				kept = kept + 1
+				if fouled then
+					if original[slot] == nil then original[slot] = sp end
+					if b == nil then
+						slot.spacing = { 0.0, 0.0, 0.0, 0.0 }
+						zeroed = zeroed + 1
+					else
+						local to = footprintSpacing(b)
+						slot.spacing = to
+						clipped = clipped + 1
+						if example == nil then
+							example = string.format("%d %.1fx%.1f -> %.1fx%.1f",
+								slot.id, sp[1] + sp[2], sp[3] + sp[4],
+								to[1] + to[2], to[3] + to[4])
+						end
+					end
+				else
+					kept = kept + 1
+				end
 			end
 		end
 	end
 
-	local line = "trimmed the reserved ground on the rail level: "
-		.. tostring(clipped) .. " slot(s) clipped clear of the other level, "
+	pass(isRail, function(slot) return not isRail(slot) and not isOurs(slot) end,
+		true)
+	pass(isOurs, function(slot) return not isOurs(slot) end, false)
+
+	local line = "trimmed the reserved ground: " .. tostring(clipped)
+		.. " slot(s) clipped clear of what they are not allowed to overlap, "
 		.. tostring(zeroed) .. " zeroed because no single cut would do, "
 		.. tostring(kept) .. " untouched"
 	if example ~= nil then
 		line = line .. "; e.g. " .. example
 	end
-	line = line .. ". A clipped slot still has a rectangle for the bulldozer to"
-		.. " find a track by; a zeroed one does not, and a track has no other"
-		.. " geometry to be found by."
-	if zeroed > 0 then
-		log.warning(LOG .. line)
-	else
-		log.message(LOG .. line)
-	end
+	line = line .. ". Occupied slots only: an empty slot keeps its rectangle,"
+		.. " which is the only thing the cursor can find it by."
+	log.message(LOG .. line)
 	return original
 end
 
