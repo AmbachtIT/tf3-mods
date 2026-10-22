@@ -295,6 +295,64 @@ Two practical consequences:
   since `laneutil.createLane` makes two nodes per curve.
 
 
+## Two identical PERSON edges are fatal, and a lifted lane can hang below its level
+
+**Crashed the game 2026-10-22**, in `multi-layer-stations`, on placing a stock
+freight platform. Two findings, and the second is the one that generalises.
+
+### The duplicate edge
+
+```
+Duplicate edge error - TransportNetworkSystem.cpp:299 CheckDuplicateEdges
+Error at position (-2310.45, 964.96, 13.73) and (-2310.45, 964.96, 5.63)
+(tangents are (0, 0, -8.1) (0, 0, -8.1)) types: 0000000000000001
+list 1 node 5: entity -200000003, edge idx 2 of 2 duplicates entity -200000001, edge idx 14
+```
+
+**Two lanes joining the same two nodes is a fatal error**, not a redundancy the
+engine tolerates - a sibling of the assertion in the section above, and reached
+from the opposite direction: that one is a PERSON node sharing a position with a
+*vehicle* node, this one is a second PERSON edge over an existing one. Both kill
+the process rather than logging.
+
+The report is unusually generous once read properly. It names both entities, so
+the two copies can be attributed: `-200000001` was the construction's first
+subconstruction, where the mod appends its own lane (edge 14, the last), and
+`-200000003` was the third, which belonged to the other family. So the partner
+edge was **stock geometry**, not a second copy of the mod's own.
+
+So a mod that builds `PERSON` lanes between existing nodes has to check what is
+already there. Collect the pairs every existing person lane joins and refuse to
+draw between them. Over-detect rather than under-detect - treat consecutive
+nodes within a lane as joined even though `laneutil.createLane` makes two nodes
+per curve, so a multi-curve lane is pairs rather than a chain - because a missed
+edge costs the session and a spurious one costs a candidate.
+
+### Classify a lane by its subconstruction's tag, not by its height
+
+The deeper finding, and the one worth carrying to any multi-level construction.
+
+The mod picks the two ends of its link by looking for the closest pair of person
+nodes with one above the mid-height and one below. That is wrong, because
+**lifting a level lifts lanes that hang below it**: a stock rail platform addon
+- the stairs or underpass - descends about 8 m from the platform, so lifting the
+rail level by 12 m leaves its bottom node at z = +5, five metres in the air and
+below any midpoint test. It was filed as a ground-level node for weeks.
+
+Two consequences followed, and only the loud one was noticed:
+
+- the pair that shares an (x, y) most reliably is *the two ends of one existing
+  lane*, so a closest-in-plan search prefers it, and a lane drawn between them
+  is the duplicate above;
+- and the link therefore joined the upper level **to itself**. It had never
+  reached the lower level at all, which was the only thing it existed to do.
+
+A **subconstruction tag** is the honest test: it says which family a
+subconstruction came from, it survives the lift, and it is already load-bearing
+for rebuild matching ("Two subconstructions must not share a `tag`"). Height is
+a property of geometry that a level transform is free to move; the tag is not.
+
+
 ## Do not let a delegated call decide what the player sees
 
 Corollary of the per-thread `util.useFn` finding above, and worth stating on its
@@ -360,6 +418,220 @@ catchment driven by the buildings the player places is what a player expects,
 and a station whose reach ignores what is built on it reads as arbitrary. See
 that mod's `PLAN.md`, "Phase 6".
 
+
+### Cargo is not a second pool, and a catchment circle has no kind
+
+Asked on 2026-10-22, of a station whose cargo would not move: *"I suspect the
+problem is that there is no cargo pool. Is it possible to add the cargo pool to
+the concourse?"* There is no cargo pool to add. Read from the engine side:
+
+- `api.type.Station` is `tag`, `terminals`, `catchmentAreas` and `pool`, and
+  nothing else (`api/tealdef/api/type.d.tl:1318`). No flag anywhere says
+  "cargo station".
+- `api.type.CatchmentArea` is a `position` and a `radius`. **A circle carries no
+  kind.** `constructionutil.addCatchmentCircles(passengerStation, cargoStation,
+  ...)` does read `metadata.catchmentPassenger` and `metadata.catchmentCargo`
+  separately, but all it decides with them is *which station record* a circle
+  lands on - and both modular hosts pass the **same** record for both
+  arguments: rail unconditionally (`modular_station.script.lua:1359`), street
+  with a flag per kind that it derives from its own terminals and that resolves
+  to the one record either way (`modular_terminal.script.lua:3240`). So a
+  `catchmentPassenger` circle on a station that has cargo terminals is cargo
+  catchment, and a cargo building's only real contribution is its radius.
+- `Station.Pool` is `edges` and one integer `capacity`.
+  `modulesutil.getStationPoolCapacities` does return `passCap, cargoCap`, but
+  **no module in the install sets `moreCapacity.cargo`**, rail discards the
+  number it is given (`pool = { capacity = passCap }`), and street adds it into
+  the same single `pool.capacity`. The field is vestigial.
+- `pool.edges` is not load-bearing either. Only the street *cargo* platform
+  modules ever call `modulesutil.addPoolEdges(..., cargo = true, ...)`, and the
+  street hook reads the pool back with
+  `getStationPoolEdges(result, variant == moduleVariants.cargoTerminal)` where
+  that `variant` is **not in scope** - the only `local variant` near it lives
+  inside `DemangleId` (`modular_terminal.script.lua:1170`), so the comparison
+  reads a nil global and is always false. Stock's own cargo truck stations
+  therefore ship with `pool.edges` pointing at a passenger pool config that a
+  cargo-only station never filled, i.e. nil, and they work. (`addStationCapacities`
+  has a matching slip: it calls its own `getCapacityFromEdges(pool.edges)`
+  one-argument where the function takes `(subconstruction, edges)`, so the pool
+  never gains capacity from its edges at all - `constructionutil.lua:585`.)
+
+What *does* make a station carry cargo is its **terminals**: each terminal's
+`cargoTransferSpeeds[].cargoTypeSet.cargoClassesIncluded` names the classes it
+can transfer, and `Terminal.cargoLoad` / `passengersLoad` follow from that
+(`type.d.tl`, `Terminal`). The classes are `PASSENGERS`, `UNIVERSAL`, `BULK`,
+`LIQUID`, `FLATBED`, `GOODS` (`base/content/cargos/classes.zip`). The rail host
+builds its terminal groups from the platform modules' `metadata.cargo_platform`
+and feeds the specializations into those transfer speeds, so **the cargo
+platform is the whole of it** - a cargo *building* adds a radius and decoration,
+never capability.
+
+One consequence for a mod that supplies catchment itself: one circle per
+station is enough, whatever kinds it is standing in for. Two circles at the same
+position differ only in that the player sees them twice.
+
+Cargo rides the **person** network, not a network of its own: the rail and
+street platforms' lanes - cargo platforms included - are created with
+`{ "PERSON" }` (`modular_station.script.lua:934`). The `{ "CARGO" }` lanes in
+`legacytransportnetworks.lua` belong to the airfield.
+
+`UNIVERSAL` is not a narrow class, it is **all freight**. Every one of the 36
+`*.cargo.lua` files under `base/content/cargos/` reads `cargoClasses = {
+"UNIVERSAL", X }` with X one of `BULK`, `LIQUID`, `FLATBED` or `GOODS`; only
+`passengers.cargo.lua` is outside it, as `{ "PASSENGERS" }` alone. So an
+untyped cargo platform - rail's `platform_cargo_era_*`, street's
+`cargo_platform` - accepts exactly what the four typed ones accept between
+them, and a terminal whose `cargoTransferSpeeds` name only `UNIVERSAL` is a
+general goods terminal rather than a restricted one. Useful when reading a
+station record back out of a log: `classes PASSENGERS+UNIVERSAL` is a fully
+capable mixed station.
+
+A record's catchment circles are the modules' doing and nothing else, so a
+level with no building module has **no catchment of its own**. No rail module
+except a building declares `catchmentPassenger` or `catchmentCargo`; street's
+`entrance`, `exit` and `entrance_exit` declare both, at 175 m, which with one
+record for both arguments makes one entrance module two circles. And because
+`addCatchmentCircles` checks its two arguments separately and warns once per
+empty one (`constructionutil.lua:532-545`), a host that passes the same record
+twice logs `no catchment areas generated for station` **twice** for one empty
+station. Two warnings, one station.
+
+### Freight moves station to stock to station, never station to station
+
+A station never hands cargo to another station. It hands cargo to **stock in
+its own catchment**, and takes cargo from stock in its own catchment.
+`api.engine.system.catchmentAreaSystem.getStationCatchables(station, isCargo)`
+is the engine's own list of what a given station can reach, and it is the
+decisive query for "why will this vehicle not unload".
+
+Stock is an industry, a town building, or a **warehouse**. A warehouse is stock
+and nothing else: `warehouses/warehouse.script.lua` declares no station, no
+terminal and no catchment, only `STORAGE_STOCK` entries pushed into
+`result.subconstructions[1].stocks` (`:331`) with a cargo-class filter and a
+capacity. So two stations exchange freight by both having the same warehouse in
+catchment - one puts cargo in, the other takes it out. A truck station next to a
+cargo train station with no warehouse between them is not a transfer, it is two
+dead ends.
+
+Passengers are the opposite case: they walk, so a person lane between two
+stations is enough and no stock is involved. Do not reason about one from the
+other.
+
+Related, and cheaper to learn here than in game: **one construction with N
+station records becomes N station groups**, one station each - confirmed with
+`stationGroupSystem.getStationGroup` over a construction with two. There is no
+way to join them: `cmd.d.tl` has no join or merge command and
+`stationGroupSystem` is read-only. A line stop addresses
+`(stationGroup, station, terminal)`, and a station's terminals index **its own
+subconstruction's** lane lists - `addLaneLists`' `replaceIndices` rewrites them
+per subconstruction (`legacytransportnetworks.lua:17250-17280`), with first
+element `< 0` left alone as an edge-list reference - so terminals cannot simply
+be moved between station records either. Decide how many stations a
+construction has before building on it.
+
+`Terminal.cargoLoad` / `cargoUnload` / `passengersLoad` / `passengersUnload`
+are **engine-derived**: the names appear in `type.d.tl:1286-1292` and in no
+stock script anywhere. Observed over a mixed station, they come out true for
+exactly those terminals whose `cargoTransferSpeeds` name a non-`PASSENGERS`
+class. Nothing to set, and nothing a merge can corrupt.
+
+### Any construction can carry stock, so any construction can be a warehouse
+
+A warehouse is not a construction type with privileges. It is two fields on a
+subconstruction, and nothing stops a station, an asset or anything else from
+declaring them:
+
+    sub.stocks = { { type = "STORAGE_STOCK",
+                     cargoTypes = { cargoClassesIncluded = { "UNIVERSAL" },
+                                    cargoTypesExcluded = {
+                                        "::/cargos/passengers/passengers.cargo" } },
+                     mixedTypes = true,
+                     capacity = 500,
+                     loadSpeedModifier = 2.0,
+                     loadIndicators = { ... } } }
+    sub.warehouse = { }
+
+They produce the `STOCK_LIST` and `WAREHOUSE` components
+(`engine.d.tl:1200`, `:1670`). `warehouses/warehouse.script.lua:331` is the only
+shipped example of the pair; industries use `stocks` with `INPUT_STOCK` and
+`OUTPUT_STOCK` instead, so `STORAGE_STOCK` is the pass-through kind.
+`loadIndicators` is a list of **model indices within that subconstruction** for
+the crate stacks to draw, and is optional - omit it and the store works but
+shows nothing. A stock tile of a real warehouse is 500 at `loadSpeedModifier`
+2.0 (`warehouses/modules.script.lua:49`), which is the number to scale against.
+
+Put the stock on a subconstruction that has **models**: its position is what the
+catchment query finds. And prefer a subconstruction that does not also carry a
+`station` - `STATION` together with `WAREHOUSE` on one entity is a combination
+the base game never ships.
+
+This is the way to give any station built-in freight transfer, and it is worth
+reaching for before trying to make two station records into one station group -
+which cannot be done at all.
+
+To see whether such a store is actually being used,
+`api.engine.util.stock.getCargoShippedPerYear(stockListEntity)` is the counter
+that moves - it climbs as vehicles take cargo out. Its sibling
+`getCargoDeliveredPerYear` is documented as "delivered (to entity)" and stayed
+at 0 throughout a transfer that was demonstrably working, so the two are **not**
+"in" and "out" of one flow and a zero there does not mean nothing arrived.
+
+### A module that writes construction-level geometry lands in the wrong family
+
+Stock's modular street station ends its hook by bucketing everything that is
+not the station itself into a second subconstruction, built straight from the
+construction-level lists (`modular_terminal.script.lua:3204-3222`):
+
+    table.insert(result.subconstructions, {
+        models = result.models, laneLists = result.laneLists, tag = 2,
+    })
+
+Then it calls `legacytransportnetworks.addLaneLists(result)`, which walks
+**each subconstruction's own models** and builds a person lane for every lane
+the model file declares, stamped with that model instance's transform
+(`legacytransportnetworks.lua:17212-17249`).
+
+The rail station does the mirror image: its hook copies every
+construction-level model into its own subconstruction
+(`modular_station.script.lua:1341`) and calls `addLaneLists` afterwards. Both
+hosts therefore *expect* to own whatever the module pass left at construction
+level, and in a single-family construction each of them does.
+
+Merge two families and `result.models` can only belong to one of them. Which
+matters because of an asymmetry in how stock modules write: the rail station's
+module scripts almost all open with
+
+    result = result.cargoStation          -- modules.script.lua:75
+
+so their geometry goes straight into the host's subconstruction and never
+touches construction level. One function does not - `trainstationutil.makeTrack`
+is handed the construction result and appends a model to `result.models`
+(`trainstationutil.lua:38`) - and that single exception is enough. The model
+lands in the *other* family's list, gets bucketed by the other family's hook,
+and has its lanes built at whatever transform it has at that moment. Lift the
+owning family afterwards and those lanes stay behind at the old height.
+
+Nothing reports it. The geometry looks right, because the model is
+`tn_underground_connection.mdl`: lane data with no visible mesh. The only
+symptom is a pedestrian network that stops dead somewhere, and a closest-node
+search that prefers the stranded copy, because it sits directly below the real
+thing.
+
+So when hosting, do not ask which lists to share - ask **which family's modules
+write construction-level, and does that family own the list**. The fix is to
+move the models before either hook runs, in the window between the module pass
+and the first hook; both hosts' own machinery then does the rest. Grepping the
+guest's module scripts for `result.models` without a preceding
+`result = result.<subconstruction>` finds the cases.
+
+Two further details of `addLaneLists`. It assigns `nodes = laneList.nodes` by
+reference, so a genuinely duplicated lane shares one `nodes` table with the
+original and object identity is an exact test for it - though a lane built from
+a model only one family holds is not a duplicate at all, which is how the
+difference between "duplicated" and "misfiled" was settled here. And its
+`skipReplaceIndices` flag `return`s out of the whole loop after the first
+subconstruction (`:17250`), so a host passing `true` only ever populates
+`subconstructions[1]`.
 
 ## Hosting two stock families in one construction
 
@@ -704,7 +976,7 @@ three different formats, and nothing in the install documents them:
 | category button | a `menu_category`'s `icon` | 48 x 48 | 8bpp **greyscale**, TGA type 3 |
 
 All three are uncompressed TGA with the 26-byte v2 footer
-(` ` * 8 + `TRUEVISION-XFILE.` + ` `), which every stock file carries. The
+(`\0` * 8 + `TRUEVISION-XFILE.` + `\0`), which every stock file carries. The
 sizes are exact: a generated file of the right dimensions comes out at 144044,
 874844 and 2322 bytes respectively, the same as the stock files, which is a
 usable offline check that the format is right before the game ever sees it.
@@ -1124,6 +1396,52 @@ Watch out for relative script refs. The stock street station declares
 resolves against *your* folder once you are the caller. Make it absolute by
 joining it to the directory of the `fileName` the modifier was handed.
 
+
+## Reaching the entities: `.gs.lua` game scripts
+
+A construction script sees *records* - `subconstruction.station` is a table of
+terminals. The things the game actually simulates are **entities**, made from
+those records afterwards, and no construction script can see them. Whenever a
+question is "what did the engine do with what I declared", the answer needs a
+game script.
+
+The shape is two files, and no registration beyond their existing - any
+`.gs.lua` in an enabled mod's content is picked up:
+
+    -- thing.gs.lua
+    function data()
+        return { updateScript = { fileName = "my_mod_1::/thing.script@update" } }
+    end
+
+    -- thing.script.lua
+    function data()
+        return { update = function(userParams, state, dt) ... end }
+    end
+
+`update` is called every frame, so gate it. Read `GAME_TIME` off
+`api.engine.util.getWorld()` and compare against a stored timestamp; `dt == 0`
+means paused.
+
+**Only some component types can be enumerated.**
+`api.engine.getEntitiesWithComponent` raises "Cannot loop over this component
+type" for most of them - but `CONSTRUCTION` is enumerable, and it carries
+`fileName`, `subconstructions`, `stations` and `industries`. So the way in is
+always: scan constructions for your own file name, then reach everything else
+through the entity lists it hands you.
+
+Useful from there, all in `api/tealdef/api/engine/system.d.tl`:
+
+    stationGroupSystem.getStationGroup(station)      -> the group entity
+    stationGroupSystem.getCarriers(group, -1, -1)    -> {Carrier}, {TransportMode}
+    lineSystem.getLineStopsForStation(station)
+    lineSystem.getLinesForStationGroup(group)
+
+Wrap every engine call in `pcall` and write nothing. A probe that crashes the
+session teaches less than no probe at all, and the signatures in the tealdefs
+are not always what the runtime accepts - `api.type.Mat4f.getTransl` raises on
+a transform that indexes perfectly well as `m[13]`, `m[14]`, `m[15]`.
+
+A `.gs.lua` must never `require` anything under `::/gui/...`.
 
 ## The mod.io id lives in `_metadata/mod.io_fileid.txt`
 

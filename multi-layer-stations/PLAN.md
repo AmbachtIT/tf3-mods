@@ -1,8 +1,15 @@
 # Plan
 
-Feasibility: **unproven**. Everything in `NOTES.md` is read out of the install;
-nothing is confirmed in-game. This plan is ordered so that the cheapest probe
-kills the project soonest if it is going to die.
+Feasibility: **proven**. The station is built, placeable, editable, and as of
+2026-10-22 both **passengers and freight move between the two levels** in a real
+save. What remains is release work, not design work, and it is listed in
+*Release: what is left* immediately below. The phase sections after it are kept
+as the record of how each question was settled - read them for the reasoning,
+not for the plan.
+
+The original framing, kept because it still explains the ordering: everything in
+`NOTES.md` was read out of the install and nothing was confirmed in-game, so the
+plan was ordered to kill the project soonest if it was going to die.
 
 Status after the first probe run, 2026-10-08:
 
@@ -28,16 +35,148 @@ All probe questions that gate the design are now settled - see
 [probe/TESTS.md](probe/TESTS.md) for the results table. **Phase 4 has started**:
 `mod/multi_layer_stations_1` is v0.1, one rail platform over one bus platform.
 
-Decided along the way: the two levels stay **two separate stations**, not one
-grouped station. It matches in-game practice, lets the player inspect and name
-each level, and costs nothing in the merge - each delegated family keeps its own
-station record. Passengers transfer by walking the pedestrian lane between
-levels rather than for free.
+The two levels are **two separate stations**, and that is forced rather than
+chosen - see Phase 3, answered 2026-10-22. One construction with two station
+records becomes two station *groups*, one station each, and there is no API to
+join them. Lines on the two levels therefore cannot interchange freight
+directly; they do it through stock in the shared catchment, which is what the
+concourse's goods store is for. Passengers are a separate mechanism and a
+separate open question (Phase 10, step 2).
 
 Shape being aimed at: **option A** from `NOTES.md` - three levels at a 12 m
 pitch, each level hosting one whole stock station family offset in z, with
 per-level slot id namespacing and no terrain alignment off grade. Option B stays
 on the table only if a probe rules A out.
+
+
+## Release: what is left
+
+Ordered so that anything that can still change the shipped behaviour comes
+before the things that only polish it. Nothing here is design work.
+
+### 1. Take the probe out
+
+`content/ml_probe.gs.lua` and `content/ml_probe.script.lua`, both marked
+TEMPORARY at the top, plus their two entries in `_content.json`. They are a
+game script: they run in every session of every save that enables the mod, on
+every `Sim Pool` thread, and they must not ship.
+
+Worth keeping the files somewhere first - `probe/` is the natural home - because
+they are the only way this project can see entities, and the next entity
+question will want them. Everything they taught is in `NOTES.md`, "Reaching the
+entities", including which component types can be enumerated.
+
+### 2. Settle whether the pedestrian link stays
+
+The last open behavioural question, and it is Phase 10 step 2's: is `linkLevels`
+load-bearing for passenger interchange, or is it buying nothing?
+
+What is known, and the two facts pull against each other:
+
+- passengers were observed transferring between the levels and appearing to
+  **teleport** (2026-10-22), at a time when the person network was severed at
+  the foot of the rail stairs and the link was joining rail to rail - so they
+  crossed without a walkable path;
+- the levels are **two station groups**, so whatever moved them was not
+  interchange inside one group. That was the premise the "the lane may be
+  cosmetic" argument rested on, and it was false.
+
+So the observation is now unexplained rather than conclusive. Against keeping
+the lane: it is the only known hard-crash path in the mod (a person node that
+coincides with a vehicle node), which is why `vehicleNodeKeys` exists.
+
+**The test is T6 step 5**: make `linkLevels` inert, repeat the interchange test,
+and watch whether passengers still cross. Cheap, and it decides whether the mod
+ships a crash path it does not need.
+
+Also unobserved either way: nobody has yet watched a passenger *walk* the link
+now that it actually connects grade to platform (`street (-47.5,-13.8,0.3) ->
+rail (-47.5,-14.0,13.1), a climb of 12.8 m`). That is the other half of the same
+run.
+
+### 3. Play the freight path once, deliberately
+
+`CONCOURSE_STOCK_CAPACITY` is 100 per module, chosen 2026-10-22 over 250 so that
+two concourses buffer a train's worth of one cargo and no more. It has not been
+played at that number - the run that proved the mechanism had 500. Watch for a
+store that fills and stalls the train rather than one that keeps up, and for
+whether a real warehouse next door still feels worth building.
+
+### 4. Decide what the build-menu tile claims
+
+`multi_layer_station.con.lua` declares `description.cargoTypeSet` as
+`cargoClassesIncluded = { "PASSENGERS" }`. That is what the menu tile shows the
+station handles, and it is now wrong: both levels take freight and the concourse
+stores it. Either add the freight classes or decide the tile should advertise the
+station's primary purpose only - but decide it rather than leave it as the
+leftover it is.
+
+### 5. The README's promises
+
+`README.md` has a *What v0.1 does and does not do* section and an *Accepted
+limitations* section, and three things now belong in them:
+
+- the station appears in game as **two stations**, one per level, with separate
+  names and separate line stops - a player will notice immediately and should
+  not have to wonder whether it is a bug;
+- **freight crosses levels through the concourse's goods store**, so a station
+  with no concourse cannot interchange cargo at all. This is the "required
+  module" problem the plan already flags under Phase 10, and freight makes it
+  sharper;
+- passengers cross by whatever step 2 concludes.
+
+### 6. Art is placeholder, and says so
+
+Three sets, all deliberately labelled: the menu tiles and previews
+(`tools/make_menu_art.py`), the support's facade of tiled bridge abutment
+(`stone_abut_rep_rep.mdl`, one finished face out of four), and the concourse's
+two brick walls. The README's *Contributing art* section already carries the
+sizes, formats and volumes. **Not a release blocker** - it is honest and it
+invites replacement - but it is the first thing anyone will comment on.
+
+Worth considering: the concourse store has no `loadIndicators`, so the goods it
+holds are invisible. Crate art would make a mechanic that is currently
+log-only visible in the world.
+
+### 7. Known defects to fix or document
+
+Each one needs a decision, not necessarily a fix:
+
+- **the cargo station building cannot be placed.** The engine's module collision
+  check is height-blind and runs after our hook, so the one rail module that
+  would give the upper level catchment of its own is refused. Documented in
+  `NOTES.md`; it is the sharpest remaining functional gap.
+- **a support with no collider** - whether it would still be deletable is
+  untested, and it is the cheaper half of the collider problem.
+- **T8's recovery path** is unrun.
+- the menu icon is hardcoded to era C.
+
+### 8. Validate, then publish
+
+1. `.\deploy.ps1 -Validate` with the game **closed**. It runs the game's own
+   validator over the staging area, which is what publishing runs anyway; judge
+   `levelPc` and `levelConsole`.
+2. Run the pre-publish set in [TESTS.md](TESTS.md).
+3. Publish from the in-game Mod Manager. It writes the numeric id into
+   `_metadata/mod.io_fileid.txt` **in the staging area**, which `deploy.ps1`
+   overwrites - so copy it back into the source tree immediately and add the id
+   to the table in the root `NOTES.md`.
+
+### Frozen on first publish
+
+After the first release these become a compatibility contract, because a save
+holds them and a change to any of them breaks what the player built:
+
+- the support slot id packing, `SUPPORT_SLOT_BASE + slot.id * 10 + k`, and the
+  concourse's `CONCOURSE_SLOT_BASE + streetSlotId` with the variant digits
+  cleared;
+- the module names `ml_support` and `ml_concourse`;
+- the construction param list, which is deliberately **empty** - stored values
+  come back as 1-based indices into `values`, so adding a param later changes
+  the meaning of every station already built.
+
+`mod.json` already says the honest thing about removal: keep the mod enabled
+while a save contains one of these stations.
 
 
 ## Phase 0 - the load-bearing probe: an elevated construction edge
@@ -104,6 +243,30 @@ cargo stations in one construction) and check whether the line editor offers
 both under one station entry. Confirm against
 `api.engine.system.stationGroupSystem.getStationGroup` from a console or game
 script if the UI is ambiguous.
+
+### Answered 2026-10-22: several. The answer is no.
+
+Measured with a game script against the real station
+(`stationGroupSystem.getStationGroup`), not inferred:
+
+    station 20844: group=26028    group 26028: stations=1
+    station 20810: group=26029    group 26029: stations=1
+
+**One construction with N station records becomes N station groups**, one
+station each. There is no way to join them - `cmd.d.tl` has no join or merge
+command and `stationGroupSystem` is read-only - and terminals cannot be moved
+into one record either, because a terminal's node and edge ids index **its own
+subconstruction's** lane lists (`addLaneLists`' `replaceIndices`).
+
+So the pessimistic branch of this question is the real one, with one correction
+to what it predicted: **freight does not need merged terminals, it needs shared
+stock.** A station hands cargo to stock in its own catchment and never to
+another station, so a `STORAGE_STOCK` both levels can reach is the whole of the
+mechanism - built into the concourse, Phase 10. Confirmed carrying planks
+2026-10-22 (`shipped/yr` climbing).
+
+Passenger interchange is still open, and is now the *only* thing the pedestrian
+lane might be load-bearing for. See Phase 10, step 2.
 
 
 ## Phase 3b - the editing probe
@@ -387,10 +550,14 @@ Why a module of ours is the only thing that can do this: on the rail side
 catchment comes only from `main_building_*` / `side_building_*` / `stairs`, on
 the street side only from `entrance*`, and **each feeds its own station record**
 (`constructionutil.addCatchmentCircles` maps `catchmentPassenger` to the
-passenger station and `catchmentCargo` to the cargo one). The two levels share a
-single StationGroup, so one building serving both is the honest model, and our
-module is in neither family's module map - so neither family's sweep sees it and
-there is nothing to double-count.
+passenger station and `catchmentCargo` to the cargo one). One building serving
+both levels is the honest model, and our module is in neither family's module
+map - so neither family's sweep sees it and there is nothing to double-count.
+
+This section used to justify that with "the two levels share a single
+StationGroup". **They do not** (Phase 3, answered 2026-10-22), which makes the
+concourse more important rather than less: it is the only thing either level has
+that can serve both.
 
 ### Step 1 - catchment and capacity *(done 2026-10-09, awaiting a run)*
 

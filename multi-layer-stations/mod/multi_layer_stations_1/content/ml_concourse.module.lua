@@ -35,7 +35,7 @@ return {
 	},
 	description = {
 		name = _("Station Concourse"),
-		description = _("Spans the entrance road and serves both levels. Provides the station's passenger catchment and waiting capacity - a multi-layer station needs at least one to attract passengers at all."),
+		description = _("Spans the entrance road and serves both levels. Provides the station's passenger catchment and waiting capacity - a multi-layer station needs at least one to attract passengers at all - and a goods store that lets freight change level, the way a warehouse does between two separate stations."),
 		icon = "multi_layer_stations_1::/ml_concourse.tga",
 		previewIcon = "multi_layer_stations_1::/ml_concourse_preview.tga",
 		attributes = {

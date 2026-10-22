@@ -26,9 +26,16 @@ local function makeConstructionTemplates()
 				fileName = "::/gui/construction/construction_desc_layers.script@configureDefaultLayerFn",
 				params = { heightmapContours = true },
 			},
+			-- `rail` adds the signal list to the HUD while this is being
+			-- placed and `cargo` adds the warehouses, which is all these two
+			-- flags do (`construction_desc_react_util.getStationHudIconsConfig`).
+			-- Both are true here because both are true of the station: it has
+			-- tracks that want signalling, and its upper level takes the stock
+			-- cargo platforms. Stock's own rail station passes `rail = true`
+			-- and sets `cargo` per template; we have one template for both.
 			configureHudIconsScript = {
 				fileName = "::/gui/construction/construction_desc_hud_icons.script@configureStationHudIconsFn",
-				params = { cargo = false },
+				params = { cargo = true, rail = true },
 			},
 			-- 1930, not 1900, and the number comes from the **seeded track**.
 			--
@@ -85,9 +92,10 @@ return {
 		fileName = "::/gui/construction/construction_desc_layers.script@configureDefaultLayerFn",
 		params = { heightmapContours = true },
 	},
+	-- See the template's copy above for what these two flags do.
 	configureHudIconsScript = {
 		fileName = "::/gui/construction/construction_desc_hud_icons.script@configureStationHudIconsFn",
-		params = { cargo = false },
+		params = { cargo = true, rail = true },
 	},
 	-- "Bremen Central", not "Bremen Multi-layer Station". The mod's name has no
 	-- business being in the station's, and a multi-level interchange is the

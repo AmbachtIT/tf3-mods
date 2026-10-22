@@ -2714,6 +2714,940 @@ without decoding the images. Confirmed in-game the same session: *"The texture
 is better."* The full finding, including the two more expensive routes to
 masonry, is in the root `NOTES.md` under "A reused mesh brings its UVs".
 
+## The freight platform crash: the link was never connected to the lower level
+
+**Crashed the game 2026-10-22**, and it is the first crash this mod has caused.
+*"Placing a freight platform crashed the game."* Then, which turned out to be
+the detail that explained the timing: *"I deleted the inital passenger platform
+and replaced that by a cargo platform."*
+
+### What the report said
+
+`crash_dump/4f701020-…_7.json` and the log beside it:
+
+    Duplicate edge error - TransportNetworkSystem.cpp:299 CheckDuplicateEdges
+    Error at position (-2310.45, 964.96, 13.73) and (-2310.45, 964.96, 5.63)
+    (tangents are (0, 0, -8.1) (0, 0, -8.1)) types: 0000000000000001
+    list 1 node 5: entity -200000003, edge idx 2 of 2
+                   duplicates entity -200000001, edge idx 14
+
+A vertical 8.1 m `PERSON` edge, twice. 8.1 m is exactly the span
+`linked levels:` had been logging all along, and `-200000001` is the first
+subconstruction - street's, tag 1 - where `linkLevels` appends, at edge 14, the
+last. The other copy is in `-200000003`, the third subconstruction, which is
+rail's at tag 101. **So the partner edge was stock's, not a second copy of
+ours.**
+
+It is identifiable, too. The endpoints `(0,-12.5,5.0) -> (0,-12.5,13.1)` are
+rail-local z = -7.0 and +1.1 before the lift: a **platform addon**, the stairs
+or underpass, descending about 8 m from the platform. The slot inventory for
+that build lists `cargo_platform_addon=2`.
+
+### Why a freight platform, and why only after a replacement
+
+Because the replacement changed *which* addon lane was in the build, and the two
+are not shaped the same. The passenger addon's descent evidently carries an
+intermediate node, so its 5.0 and 13.1 nodes are not **adjacent** and a lane
+between them duplicates nothing. The cargo one is a single two-node vertical
+edge, so our copy of it was an exact duplicate.
+
+Which means the bug was never about freight. It had been latent in every build
+since `linkLevels` was written, waiting for a module whose addon lane had two
+nodes instead of three.
+
+### The real bug, which the crash only pointed at
+
+`findLevelNodes` classified a person node as upper or lower by its **height**,
+`p[3] > dz * 0.5`. Lifting the rail level lifts the lanes that hang below it, so
+that addon stub's bottom node sits at z = +5 - five metres in the air, and
+comfortably under the 6 m midpoint. It was filed as a grade node.
+
+So the closest-pair-in-plan search was offered a pair that shares an (x, y)
+exactly - the two ends of one stock lane, scoring zero - and took it every time.
+Every `linked levels:` line any session has produced reads
+`(…,5.0) -> (…,13.1)`, which is that stub at both ends.
+
+**The link has therefore been joining rail to rail since the day it was
+written.** It never reached the street level, which is the only thing it exists
+for, and that is the best explanation yet for the teleporting in T6: our lane
+was not carrying passengers because it was not connected to anything they could
+walk from.
+
+### The fix, in three parts
+
+1. **Ends are chosen by subconstruction tag**, `STREET_TAG_BASE` versus
+   `RAIL_TAG_BASE`, not by height. A tag says which family a subconstruction
+   came from and survives the lift; z is a property of geometry that the level
+   transform is free to move.
+2. **`personEdgeKeys`** collects every pair of person nodes an existing lane
+   already joins, both ways round, across all subconstructions, and the search
+   refuses them. Deliberately over-detecting: consecutive nodes count as joined
+   even though `createLane` makes two nodes per curve.
+3. **A pair that climbs less than half a pitch is refused** and counted. With
+   the families separated it should not arise, so it is logged rather than
+   quietly skipped.
+
+The log now reports the climb and where both ends came from, and a new line
+answers T6 step 5 directly when it fires:
+
+    existing person lane(s) already cross between the levels: N edge(s), e.g.
+    (…) -> (…). Stock's own, so our link may be redundant - T6 step 5
+
+Placing a freight platform works again, confirmed the same session. What the
+next run should show is a climb of about 13 m rather than 8.1 - and if
+passengers start **walking** between the levels instead of teleporting, that
+settles the question the link has been carrying since it was written.
+
+## The cargo pool does not exist, and the station already has what it would give
+
+Reported 2026-10-22, on a large station with a cargo platform: *"cargo transfer
+does not seem to be working as expected. I can't build a cargo building to the
+side, so I suspect the problem is that there is no cargo pool. Is it possible to
+add the cargo pool to the concourse building?"*
+
+Read out of the install rather than tested, because the answer is in the type
+definitions: there is **no cargo pool anywhere in this engine**. A station has
+one pool and one `capacity` integer, a catchment circle is a position and a
+radius with no kind, and the only thing that makes a station take cargo is a
+terminal whose `cargoTransferSpeeds` say so - which comes from the cargo
+*platform*, not from any building. The full chain, with the stock slips found
+along the way, is in root `NOTES.md`, "Cargo is not a second pool, and a
+catchment circle has no kind".
+
+For this mod that means the concourse has nothing to add:
+
+- its 175 m circle goes onto **both** station records already, and an untyped
+  circle on a record that has cargo terminals *is* cargo catchment;
+- its +200 capacity goes onto both as well, and the engine has nowhere else to
+  put a second number;
+- `metadata.moreCapacity.cargo` would be summed by
+  `getStationPoolCapacities` and then thrown away by the rail host, which keeps
+  `passCap` only.
+
+So no change was made to `ml_concourse.module.lua`. Declaring
+`catchmentCargo = { radius = 175 }` beside the passenger one would read as
+honest and do nothing, since `applyConcourse` already applies to every record
+and a second circle at the same position only draws twice.
+
+**The cargo building is a separate matter and is not a prerequisite.** The log
+of the run has seven preview attempts at one -
+`main_building_1_cargo` on `3806060`, `3808060`, `3809060` and
+`side_building_1_cargo` on `3806065`, `3807065`, `3808065` - and every one of
+them produced a valid result here: `modules with no slot: 0 of 91`, the slot
+occupied, three support cells created under it, and the stock hosts' own
+`no catchment areas generated for station` warnings going quiet because the
+building had supplied catchment of its own. So our hook offered the slot and
+accepted the module; the refusal is the engine's, after us, and it has a known
+mechanism in this mod - the module collision check is flat, so a building whose
+footprint reaches past the deck at +12 collides with what is at grade (see
+"Round fourteen" and root `NOTES.md`, "A slot stacked over another one reserves
+no ground"). Worth its own round if it is wanted; it costs the station nothing
+but art.
+
+What the run **cannot** tell us is what the engine thinks the two station
+records are, because nothing in the result says so. Hence a new diagnostic,
+`logStations`, which reads the terminals back out after both hooks have run:
+
+    station records: tag 1: 4 terminal(s), 0 taking cargo, 4 taking passengers,
+    classes PASSENGERS; 2 catchment circle(s) r=175/175; pool capacity 200 over
+    0 edge(s) | tag 101: …
+
+That line answers "is this a cargo station?" directly - a cargo platform must
+show up as a terminal taking cargo, with its class among `UNIVERSAL`, `BULK`,
+`LIQUID`, `FLATBED`, `GOODS`. If it does and cargo still does not move, the
+station is not where the fault is.
+
+One small fix went in alongside: both copies of `configureHudIconsScript`
+passed `{ cargo = false }` and no `rail`, so while the station was being placed
+the HUD showed neither the signal list nor the warehouses. Those two flags do
+nothing else (`construction_desc_react_util.getStationHudIconsConfig`), and both
+are true of this station, so both are now set. Stock's rail station passes
+`rail = true` and varies `cargo` per template; we have one template for both.
+
+Left alone deliberately: `description.cargoTypeSet` still says `PASSENGERS`
+only. It drives the build-menu tile's cargo icons and nothing else
+(`construction.tl:3746`); stock's modular station omits the field entirely and
+leans on a `specialization` param we do not have. Listing all six classes would
+put every produced cargo type on the tile.
+
+## The rebuild log clears the station, and takes back what it said about the link
+
+The module added on 2026-10-22 to force a rebuild, and the `station records:`
+line it produced four times over:
+
+    tag 1: 6 terminal(s), 4 taking cargo, 2 taking passengers, classes
+    BULK+LIQUID+FLATBED+GOODS+PASSENGERS; 6 catchment circle(s)
+    r=175/175/175/175/175/175; pool capacity 200 over 0 edge(s)
+    | tag 101: 7 terminal(s), 2 taking cargo, 5 taking passengers, classes
+    PASSENGERS+UNIVERSAL; 2 catchment circle(s) r=175/175; pool capacity 200
+    over 0 edge(s)
+
+**The station is a cargo station on both levels, and the upper one accepts
+every freight type in the game.** `UNIVERSAL` reads like a narrow
+container-only class and is the opposite: every one of the 36 `*.cargo.lua`
+files in `base/content/cargos/` lists `cargoClasses = { "UNIVERSAL", X }` with
+X one of BULK, LIQUID, FLATBED or GOODS, and only `passengers.cargo.lua` sits
+outside it. So the untyped rail cargo platform the station was built with takes
+exactly what the four typed ones take together. Nothing about the records
+explains cargo not moving.
+
+Three things the same log settles on the way past:
+
+1. **The two `no catchment areas generated for station` warnings per rebuild
+   are the rail host's, and they are cosmetic here.** `addCatchmentCircles`
+   checks its two arguments separately and warns once per empty one
+   (`constructionutil.lua:532-545`); the rail host passes the same record
+   twice, so a rail record with no circles warns twice. It has none at that
+   point because **no rail module except a building declares any catchment**,
+   and there is no building on this station. Our `applyConcourse` puts the
+   circles on afterwards, which is why the final record reads 2.
+
+2. **Where the six street circles come from.** `entrance.module.lua`,
+   `exit.module.lua` and `entrance_exit.module.lua` each declare
+   `catchmentPassenger = { radius = 175 }` *and* `catchmentCargo = { radius =
+   175 }`, and the street host passes its one record for both arguments, so one
+   entrance module is two circles. Two entrances plus our two concourse circles
+   is six.
+
+3. **So the rail station's whole catchment is the concourse's**, two 175 m
+   circles centred on the two concourse cells at the ends of the street level.
+   That is worth saying plainly because it sharpens what the unplaceable cargo
+   building costs: it is still not what makes a station take cargo, but it is
+   the only rail module that would give the upper level a catchment of its own
+   (`main_building_*_cargo` 150 m, `side_building_*_cargo` 50 m). Without it
+   the rail level sees exactly what the concourse sees.
+
+### The 90 crossing edges were never crossings
+
+The line that has been in every log since the freight-platform fix:
+
+    existing person lane(s) already cross between the levels: 90 edge(s), e.g.
+    (80.0,27.5,13.1) -> (80.0,27.5,5.0). Stock's own, so our link may be
+    redundant - T6 step 5
+
+**Wrong, and its own example says so.** Both ends of `(80.0,27.5,13.1) ->
+(80.0,27.5,5.0)` are rail: 13.1 is the platform surface and 5.0 is the bottom
+of a platform addon hanging below the deck - the same stub that caused the
+duplicate-edge crash. The test counted edges straddling `z = dz/2`, and an
+edge cannot answer the question anyway: a lane list belongs to one
+subconstruction, so **no stock edge ever spans the two families**. What joins
+two levels is a node they *share*, because the engine welds person nodes that
+coincide.
+
+Replaced with that test, over the two tag-separated candidate sets
+`findLevelNodes` already builds, plus the z profile of each:
+
+    person nodes: N street (z -7.0..0.3, 4 distinct, commonest 0.0 x310 / …),
+    M rail (z …); K node(s) shared between the levels. Zero shared means the
+    lane we draw is the only way across, so it had better end somewhere a
+    person can stand.
+
+The straddling count is kept, relabelled as what it is, because a rail lane
+diving 8 m below its own deck is worth seeing.
+
+This matters for the cargo question by elimination. If `K = 0`, the only
+pedestrian route between the bus platform and the train platform is our single
+link lane - and that lane's lower end has read `street (32.5,0.0,-7.0)` since
+the tag-based classification went in. **Seven metres underground.** Whether
+that is a real place to stand or a dead end inside the ground is what the z
+profile will say: if the street level is one surface at about 0 with a handful
+of outliers at -7, the closest-pair-in-plan search is picking a stub, and the
+interchange is joined to nothing at the bottom. That would explain cargo not
+transferring between the levels, and the teleporting passengers, and it would
+re-open T6 step 5, which was half-answered on the strength of the line above.
+
+Also added to `station records:`, for the next rebuild: per-record totals of
+`terminal.personEdges` - the lane edges cargo and passengers stand on
+(`type.d.tl:1278`) - and how many terminals have none, cargo ones counted
+separately. A terminal with no wait area is a stop a vehicle can pull up to and
+nothing can be handed over at. Cargo terminals legitimately have no `capacity`:
+`addStationCapacities` only sets it where the terminal's own `passengers` flag
+is set (`constructionutil.lua:594-598`), and the overflow is the pool, which is
+shared and untyped.
+
+Not changed, and worth recording as checked: both stock hooks run in our
+`terminateConstructionHook`, so `addStationCapacities` and
+`addCatchmentCircles` are called by stock on stock's own records - we add to
+them, we do not replace them.
+
+
+## Zero shared nodes, and a street level that is 7 m underground
+
+The rebuild of 2026-10-22 20:20, with the symptom stated precisely for the
+first time: a train carrying planks reaches the elevated cargo platform and
+**will not unload them**. Everything upstream works - truck line to the
+sawmill, train from the dropoff warehouse - and the truck line waiting on the
+lower level is the planks' onward leg.
+
+The new diagnostics:
+
+    person nodes: 430 street (z -7.0..0.3, 3 distinct, commonest -7.0 x288 /
+    0.3 x104 / 0.0 x38), 1908 rail (z 5.0..13.1, 2 distinct, commonest 13.1
+    x1662 / 5.0 x246); 0 node(s) shared between the levels.
+
+    station records: tag 1: … wait areas: 36 person edge(s) over the
+    terminals, 0 terminal(s) with none | tag 101: … wait areas: 144 person
+    edge(s) over the terminals, 0 terminal(s) with none
+
+**Every terminal has a wait area**, cargo ones included, so nothing is boarding
+into thin air. And `0 node(s) shared between the levels` makes our single link
+lane the only route - which puts all the weight on where that lane ends.
+
+It ends at `street (32.5,0.0,-7.0)`, and **288 of the 430 "street" person nodes
+are at exactly z = -7.0**, more than the 142 at 0.0 and 0.3 put together. Two
+facts about that depth:
+
+- **No street model has geometry anywhere near it.** Every
+  `street/modular_street_station/**/*.mdl` was searched for a coordinate
+  between -6.9 and -7.1: none. The two `-7.5`s in the street scripts are a *y*
+  offset in a slot transform and an *x* offset on a cargo path model, neither
+  of them a depth.
+- **-7.0 + 12 = 5.0**, which is exactly where the rail side's 246 lower nodes
+  sit - the platform addon hanging below the deck, the same stub that caused
+  the duplicate-edge crash.
+
+So the likeliest reading is that the "street" end of the interchange is an
+**unlifted copy of rail's own platform-addon lanes**, filed as street because
+its subconstruction tag is below `RAIL_TAG_BASE`. If that is right, the link
+joins the rail platform to another piece of rail, the bus platform at z ~ 0 has
+no connection upward at all, and the levels have never actually been joined -
+only made to look joined by whatever carried the T5b interchange.
+
+`finish` assigns tags per family, street `1..n` and rail `101..m`, so tags 1
+and 2 are both *street* by construction - which is why the next diagnostic
+reports person nodes **per subconstruction and per lane list**:
+
+    person nodes of subconstruction tag 1 (N): z 0.3: … node(s) in … lane(s);
+    z -7.0: … node(s) in … lane(s)
+
+If the -7.0 nodes turn out to be in a street-tagged subconstruction holding
+rail lanes, the fix is in the merge, not in `findLevelNodes`. If they are
+genuinely street's, then something places a street lane 7 m down and the
+closest-pair search is right to find it and wrong to use it.
+
+### Why a train would refuse to unload
+
+Nothing in the station record forbids it: tag 101 takes `UNIVERSAL`, which is
+every freight type, planks included, and its cargo terminals have wait areas.
+What a train also needs is somewhere for the cargo to **go**. The planks' next
+leg is the truck line on the lower level, which is a *different station record*
+in the same structure, and reaching it means crossing between the levels. No
+crossing, no onward route, no reason to unload.
+
+That is a hypothesis with one competing candidate, which the same rebuild will
+now also answer. `cargoTransferSpeeds` carries a `length` and a
+`loadSpeedModifier` per class (`type.d.tl:1297-1304`), accumulated by the rail
+host at 40 m per cargo platform tile with a modifier of 1 for UNIVERSAL and 2
+for a typed platform (`modular_station.script.lua:1042-1049`). **A class listed
+with length 0 is a terminal that accepts the cargo and can never move a crate
+of it** - which from the cab is indistinguishable from a refusal. The record
+line now ends with, per class, that length and modifier:
+
+    transfer PASSENGERS 0m x1, UNIVERSAL 80m x1
+
+### Cleared on the way past
+
+- **`pool.edges = 0` on the rail record is stock.** No rail module calls
+  `modulesutil.addPoolEdges` at all, so stock's own `getStationPoolEdges(result,
+  true)` reads a `poolConfig.cargo` nobody wrote and a stock rail cargo station
+  ships with no pool edges either. Street's zero is the known out-of-scope
+  `variant` slip reading `poolConfig.passenger`.
+- **Cargo terminals with no `capacity` are stock too.**
+  `addStationCapacities` only sets it where the terminal's own `passengers`
+  flag is set (`constructionutil.lua:594-598`); cargo overflows to the pool,
+  which is shared and untyped.
+- **`applyMat` reads the translation correctly** (`m[13..15]`, column-major),
+  so the -7.0 is not a matrix indexing artefact.
+
+
+## The phantom network under the station: street's bucket was holding rail's lanes
+
+**Superseded in part - see "It was not a duplicate, it was a misfiled underpass" below.** The location was right and the diagnosis was not: those lanes are not a duplicate of anything rail holds, so the identity-based prune this round shipped removed nothing.
+
+The per-subconstruction breakdown, from the rebuild after a support module was
+removed:
+
+    person nodes of subconstruction tag 1 (32):   z 0.3: 30 in 10 lane(s); z 0.0: 2 in 2
+    person nodes of subconstruction tag 2 (400):  z 0.3: 74 in 42; z 0.0: 38 in 16; z -7.0: 288 in 36
+    person nodes of subconstruction tag 101 (1932): z 13.1: 1686 in 54; z 5.0: 246 in 24
+
+All 288 of the -7.0 nodes are in **tag 2**, which `finish` numbers from the
+street base - so they were being classified as grade level. And tag 2 is this,
+the last thing stock's street hook does:
+
+    result.subconstructions = {}
+    …
+    table.insert(result.subconstructions, {
+        models = result.models,
+        laneLists = result.laneLists,
+        tag = 2,
+    })                                 -- modular_terminal.script.lua:3204-3222
+
+**A bucket built straight from the construction-level lists.** In stock those
+hold street's own models and nothing else. Here they are the *shared* lists, so
+the bucket collects every rail model the module pass added, and street's
+`legacytransportnetworks.addLaneLists(result)` - called immediately after, on
+its own subconstructions - walks that bucket's models and builds person lanes
+for all of them. At their **pre-lift** positions, because `liftRail` has not run
+yet.
+
+So the construction has been carrying a second, unlifted copy of rail's
+pedestrian network seven metres underground: `-7.0 + 12 = 5.0`, which is
+exactly where rail's own platform addon ends up after the lift.
+
+And that is why the interchange connected nothing. `findLevelNodes` picks the
+closest pair in plan between a "street" node and a "rail" node; the closest
+thing to a rail platform is the phantom copy of that same platform's addon
+directly below it; so the lane joined rail to rail with extra steps, and the
+bus platform at z ~ 0 was never a candidate. `0 node(s) shared between the
+levels` said the rest: nothing else joined them either. **The two levels have
+never been connected**, which is the honest answer to T6 step 5 and the reason
+a train has nowhere to send its planks.
+
+### The fix, and why it is self-verifying
+
+`pruneRailLanesFromStreet(streetResult, railResult)`, called between the two
+hooks and the lift - it needs rail's subconstruction, which only rail's hook
+creates.
+
+Rail's lanes are identified by **object identity of the `nodes` table**, not by
+position. `addLaneLists` sets `nodes = laneList.nodes` straight from the
+model's own lane data (`legacytransportnetworks.lua:17235`), so the copy in
+street's bucket and the copy in rail's subconstruction are two lane records
+pointing at **one** `nodes` table. Matching on position would mean guessing a
+tolerance over hundreds of nodes; identity is exact.
+
+Removed in place with `table.remove`, because street's bucket *is* the shared
+`result.laneLists` - reassigning the field would leave the rail lanes in the
+shared table for whatever reads it next and quietly detach the bucket from it.
+Both hooks have run by then, so nothing appends to it any more.
+
+The property worth having: **if the diagnosis is wrong, the fix does nothing.**
+No `nodes` table shared with rail means no lane matches and none is removed.
+The log says which it was:
+
+    pruned 36 lane(s) and 288 node(s) of rail's out of the street family's
+    subconstructions, keeping N.
+
+What the next run should show: that line with roughly those numbers, `street`
+in `linked levels:` at z 0.3 or 0.0 instead of -7.0, a climb of about 12.8 m
+instead of 20.1, and the street z profile down to its two real surfaces.
+
+Not yet known, and deliberately not chased in the same round: whether the same
+sharing puts street's *models* into rail's subconstruction, which `liftRail`
+would then raise. The station does not look duplicated or floating in game, so
+something already prevents it - the `lifted` memo in `liftRail` is the
+candidate - but that is a separate question from the lanes.
+
+
+## It was not a duplicate, it was a misfiled underpass
+
+The prune shipped in the previous round removed nothing: no `pruned ...` line in
+the log, `z -7.0: 288 node(s) in 36 lane(s)` still in tag 2, and the planks
+still sitting in the train. The staged script was byte-identical to the source
+(`md5sum`) and 55 minutes older than the session, so the game ran it. `dropped`
+was zero, which the fix was built to make meaningful: **the lanes are not
+duplicates of rail's.**
+
+Finding the model that owns them settled it. Scanning every lane node in
+`legacytransportnetworks.lua` for a z below -3 returns five models, four of them
+airport, and:
+
+    /stations/rail/era_a/tn_underground_connection.mdl   {-7.0: 8}
+
+Eight nodes at -7. The station has 36 tracks; 36 x 8 = 288, the exact count. It
+is the rail station's **pedestrian underpass** - the tunnel joining the foot of
+one platform stair to the next - and it has no visible mesh, only lane data.
+
+### Why it was in street's bucket
+
+`trainstationutil.makeTrack` adds it, once per track tile:
+
+    result.models[#result.models + 1] = {
+        id = "/stations/rail/era_a/tn_underground_connection.mdl",
+        transf = transf.mul(transform, transf.transl(vec3.new(0, 0, 0))),
+        tag = tag,
+    }                                       -- trainstationutil.lua:38
+
+and `makeTrack` is called from a **module** - `trackmodule.script.lua:9` and
+`modules.script.lua:709-733` - so `result` there is the merged result, whose
+`models` is street's list (`STREET_LEVEL_LISTS`).
+
+Every other rail module avoids this by accident of style. They all open with
+
+    result = result.cargoStation            -- modules.script.lua:75
+
+which rebinds the name before anything is written, so their geometry lands in
+rail's own subconstruction and the lift finds it. `makeTrack` passes `result`
+straight through. That one exception is the whole bug, and it is why the station
+*looks* perfect: the only thing misfiled is invisible.
+
+In stock none of this matters, because rail's hook copies every
+construction-level model into its subconstruction
+(`modular_station.script.lua:1341`) and only then calls `addLaneLists`. Here
+rail's hook reads `railResult.models`, which never held it.
+
+### What that did to the network
+
+Rail's own person lanes end at `z 5.0: 246 node(s) in 24 lane(s)` - the stair
+feet, -7 lifted by 12. The tunnel that should continue from there was at grade
+in the other family, twelve metres below. So the upper level's walkable network
+was severed at the bottom of its own stairs, in *both* directions and for both
+passengers and freight.
+
+That is the single fact behind everything the last three rounds measured:
+`0 node(s) shared between the levels`, the interchange lane choosing
+`street (32.5,0.0,-7.0)` (the stranded tunnel was the nearest thing tagged
+street to any rail platform, and sat directly beneath one), the 90 edges
+straddling z = 6.0 being stairs to nowhere - and a train with nowhere to put its
+planks.
+
+The previous round's reading of tag 2 was right about the symptom and wrong
+about the cause: the -7.0 nodes are not a ghost of something rail also has, they
+are the only copy, in the wrong family and at the wrong height.
+
+### The fix
+
+`moveRailModelsToRail`, run in the window **before either hook** - after the
+module pass, which puts the model there, and before street takes the list by
+reference. It moves every construction-level model whose id starts with
+`/stations/rail/` into `railResult.models`, rewriting street's list in place.
+
+Then stock does the rest unaided: rail's hook absorbs the model,
+`addLaneLists` builds its lanes in rail's subconstruction, `liftRail` raises
+them with everything else, and street's hook never builds its copy.
+
+Matched on the prefix rather than the one file name, so a second offender would
+be moved too and named in the log. Our supports (`multi_layer_stations_1::/`)
+and street's geometry do not match.
+
+What the next run should show:
+
+    moved 36 rail model(s) off the construction level into the rail family,
+    leaving N: /stations/rail/era_a/tn_underground_connection.mdl x36
+
+tag 2 down to 112 person nodes with no -7.0 at all; tag 101 up by 36 lanes and
+288 nodes at z 5.0 (24 -> 60 lanes, 246 -> 534 nodes); a non-zero shared-node
+count or an interchange lane from a real street surface at 0.3 or 0.0, a climb
+near 12.8 m instead of 20.1.
+
+## The underpass fix landed, and the question moved out of the construction
+
+The relocation verified itself on every number predicted:
+
+    moved 36 rail model(s) off the construction level into the rail family,
+    leaving 298: /stations/rail/era_a/tn_underground_connection.mdl x36
+
+      tag 2 (street):  400 nodes, 288 at -7.0   ->  112 nodes, no -7.0
+      tag 101 (rail): 1932 nodes, 246 at 5.0    -> 2220 nodes, 534 at 5.0
+                       in 24 lanes                  in 60 lanes
+      link: street (32.5,0.0,-7.0) -> rail 13.1, climb 20.1 m
+         -> street (-47.5,-13.8,0.3) -> rail 13.1, climb 12.8 m
+
+So the upper level's pedestrian network is whole and the interchange runs from a
+real bus-platform surface. The planks still do not move, which means that was a
+genuine defect and not *this* defect.
+
+### Closed off against stock, so they stop coming back
+
+- **Pool storage is irrelevant to cargo.** Only building modules declare
+  `moreCapacity`, and every cargo variant of them declares `passenger = 0`
+  (`main_building_1_cargo.module.lua` and siblings). No rail module anywhere
+  calls `addPoolEdges`. A stock rail cargo station therefore ships with
+  `pool.capacity = 0` over `0 edge(s)` and works; ours has 200 from the
+  concourse. Rail computes `cargoCap` at `modular_station.script.lua:1249` and
+  then never uses it - stock, and apparently harmless.
+- **Both levels accept planks.** Planks are `{ "UNIVERSAL", "FLATBED" }`;
+  street carries `FLATBED 30m`, rail carries `UNIVERSAL 480m`.
+- **`cargoLoad` / `cargoUnload` are engine-derived.** The strings appear in
+  `type.d.tl:1286-1292` and in no stock script at all, so the merge cannot have
+  mangled them.
+- **`ConstructionType` is not something a `.con` declares.** The enum exists
+  (`type.d.tl:2191-2210`, including `RAIL_STATION_CARGO` and `WAREHOUSE`) but no
+  stock station `.con.lua` sets a `type` other than the template's `"DYNAMIC"`.
+- **A warehouse is not a station.** `warehouse.script.lua` has no station or
+  terminal at all; it puts `STORAGE_STOCK` entries in
+  `result.subconstructions[1].stocks`. So the warehouse in the working half of
+  the test line is storage, not a station bridge, and copying it would not help.
+
+### What the game says, and what it means
+
+Asked in game: the multi-layer station shows as **two separate stations**, and
+the train line's stop is correctly assigned to a cargo platform.
+
+Two stations is the whole problem, if they are also two station *groups*.
+Freight does not walk. Passengers cross between groups on the person network -
+which is what the interchange lane is for - but cargo transfers *within* a
+group. A route that arrives by train on the upper level and leaves by truck from
+the lower one only exists if both stations belong to one group; otherwise the
+planner sees no way onward and a train with nowhere to put its load will not
+unload it.
+
+The construction log cannot answer this. `subconstruction.station` is a record;
+the group is made of entities, after the fact, by the engine.
+
+### The probe
+
+`ml_probe.gs.lua` + `ml_probe.script.lua`, shipped in the mod itself rather than
+in `probe/` so that no savegame has to adopt a new mod mid-debug. **Temporary -
+remove before release.** It reports, every ten game seconds under the prefix
+`[ml-probe]`:
+
+- the construction's `stations` list, found by scanning `CONSTRUCTION` entities
+  for our file name (`CONSTRUCTION` is one of the few component types Lua may
+  enumerate - everything else has to be reached through it);
+- per station: `getStationGroup`, terminal count, how many terminals are
+  cargo-capable, how many report `cargoUnload`, any transfer entry with
+  `length = 0`, catchment count, line stops;
+- whether those groups are one or several, stated in words;
+- per group: `getCarriers(group, -1, -1)` and `getLinesForStationGroup`.
+
+Read-only, every engine call wrapped in `pcall`.
+
+If it says one group, grouping is innocent and the next suspect is the route
+beyond the station. If it says two, the design question is how to get one
+station group out of one construction - and the obstacle is already known: a
+terminal's `personNodes` / `personEdges` / `vehicleEdges` are indices into **its
+own subconstruction's** lane lists, rewritten per subconstruction by
+`addLaneLists`' `replaceIndices` (`legacytransportnetworks.lua:17250-17280`), so
+a single station record cannot simply be handed terminals from both families.
+
+## Two station groups, confirmed - and the wrong question
+
+The probe answered in one line:
+
+    construction 20822: 2 station(s), 3 subconstruction(s)
+      station 20844: group=26028 terminals=6 cargo-capable=4 cargoUnload=4 catchment=6 lineStops=2
+      station 20810: group=26029 terminals=7 cargo-capable=2 cargoUnload=2 catchment=2 lineStops=1
+      -> 2 SEPARATE station groups (26028 x1, 26029 x1)
+      group 26028: stations=1 carriers=1 lines=2
+      group 26029: stations=1 carriers=2 lines=1
+
+Worth keeping from that: **`cargoUnload` is true on exactly the terminals that
+carry a freight `cargoTransferSpeeds` entry** - 4 of street's 6, 2 of rail's 7.
+The engine derives the flag and agrees the terminals can unload. Whatever stops
+the planks, it is not the terminals.
+
+One construction with two station records makes **two station groups**, one
+station each. There is no API to join them: `cmd.d.tl` has no join or merge
+command, and `stationGroupSystem` is read-only. So that is simply what the
+engine does, and it is not a defect of ours to fix.
+
+### Freight does not move station to station
+
+This is the correction the last two rounds were missing, and it is a
+game-mechanics fact rather than anything about this mod.
+
+A station does not hand cargo to another station. It hands cargo to **stock in
+its own catchment**, and takes cargo from stock in its own catchment -
+`catchmentAreaSystem.getStationCatchables(station, isCargo)` is the engine's own
+list of what a given station can reach. Industries are stock. Town buildings
+are stock. And a warehouse is stock and nothing else:
+`warehouse.script.lua` has no station, no terminal, no catchment of its own -
+it puts `STORAGE_STOCK` entries into `result.subconstructions[1].stocks`
+(`:331`), with a `cargoTypes` class filter and a capacity.
+
+Which is why the working half of the test line reads the way it does: *"the
+dropoff station is connected to a train station using a warehouse"*. That is not
+a workaround, it is the mechanism. Two stations exchange freight by both having
+the same warehouse in catchment - the truck station puts planks into it, the
+train station takes them out.
+
+So a multi-layer station needs no station-group surgery to move freight between
+its levels. It needs a warehouse standing in the shared catchment, and both
+levels already have catchment over the same ground: street carries six circles
+of r=175 and rail two, all centred on the structure.
+
+### What the probe reports now
+
+Added per station: `cargoCatchables`, the count from
+`getStationCatchables(station, true)`. Then the number that actually matters -
+how many cargo stocks are reachable from **every** one of our stations, with
+ids. Zero means freight has nowhere to change mode here, whatever else is
+right.
+
+Also fixed: the first version printed its whole report six times a second. The
+update runs on each `Sim Pool` thread, every one with its own Lua state, so the
+interval guard is per state and cannot see the others. The report is now
+collected into a list and emitted only when it differs from the last one, which
+also makes a change visible the moment it happens.
+
+## The concourse becomes the warehouse
+
+Asked directly, 2026-10-22: *"Is it possible to integrate warehouse
+functionality in the concourse?"* It is, with no new machinery at all, and it is
+the right place for it: the concourse is already the module that serves both
+levels.
+
+A warehouse is **stock and nothing else**. `warehouses/warehouse.script.lua`
+declares no station, no terminal and no catchment of its own - only two fields
+on a subconstruction:
+
+    result.subconstructions[1].stocks        -- :331, STORAGE_STOCK entries
+    result.subconstructions[1].warehouse = { }
+
+which is what produces the `STOCK_LIST` and `WAREHOUSE` components
+(`engine.d.tl:1200`, `:1670`; both are in the enumerable `ComponentType` list).
+Neither field is warehouse-only - industries use `stocks` too - so a
+subconstruction of ours can carry them, and ours stands inside both levels'
+catchment by construction.
+
+### What was added
+
+`addConcourseStock`, called from `finish` immediately after `applyConcourse`.
+Per concourse module it adds `CONCOURSE_STOCK_CAPACITY = 250` of storage:
+
+    {
+        type = "STORAGE_STOCK",
+        cargoTypes = {
+            cargoClassesIncluded = { "UNIVERSAL" },
+            cargoTypesExcluded = { "::/cargos/passengers/passengers.cargo" },
+        },
+        mixedTypes = true,
+        capacity = 250 * n,
+        loadSpeedModifier = 1.0,
+    }
+
+`UNIVERSAL` with `mixedTypes` is the universal warehouse's own configuration
+(`warehouse.script.lua:272-285`), and `UNIVERSAL` is every freight class in the
+game, so this takes anything but passengers - which is what a transfer store
+between a railway and a road should do.
+
+250 rather than a warehouse tile's 500 at `loadSpeedModifier` 2.0
+(`warehouses/modules.script.lua:49`), on purpose: the concourse is a passenger
+building with a goods dock, not a goods shed, and a player who wants real
+throughput should still want a real warehouse. Two concourses make 500.
+
+No `loadIndicators`. Those are model indices for the crate stacks a warehouse
+draws, and the concourse has no crate art; the store works without them, it
+just does not show its contents.
+
+### Where it lives, and why not on a station
+
+On the street family's **catch-all** subconstruction - tag 2 - found as "has
+models, has no station of its own, lowest tag". Two reasons:
+
+- it already holds the concourse's own geometry, so it has models and therefore
+  a position for the catchment query to find. An empty subconstruction might
+  well have no bounding volume at all;
+- `STATION` and `WAREHOUSE` on one entity is a combination the base game never
+  ships, and there is no reason to be the first.
+
+Logged as `concourse goods store: N of UNIVERSAL storage on subconstruction tag
+T, marked as a warehouse`, and the probe now reports any subconstruction of ours
+carrying a `STOCK_LIST` or `WAREHOUSE` component with its capacity - so "the
+stock was never created" and "the stock exists but nothing can reach it" are
+distinguishable without guessing.
+
+### What the next run should show
+
+    [multi-layer] concourse goods store: 500 of UNIVERSAL storage on
+                  subconstruction tag 2, marked as a warehouse
+    [ml-probe]   subconstruction <e>: stocks=1 capacity=500 warehouse=yes
+    [ml-probe]   -> 1 cargo stock(s) reachable from EVERY station: <e>
+
+and the planks moving. Two station groups is still the expected and unfixable
+state; it stops mattering once both of them can reach the same crate.
+
+The concourse's own description now says so, since it is a reason to place one:
+*"...and a goods store that lets freight change level, the way a warehouse does
+between two separate stations."*
+
+## The store works; the complaint moved
+
+First run with `addConcourseStock`:
+
+    [multi-layer] concourse goods store: 500 of UNIVERSAL storage on
+                  subconstruction tag 2, marked as a warehouse
+    [ml-probe]   subconstruction 20845: stocks=1 capacity=500 warehouse=yes
+    [ml-probe]   station 20844: ... cargoCatchables=3
+    [ml-probe]   station 20810: ... cargoCatchables=3
+    [ml-probe]   -> 3 cargo stock(s) reachable from EVERY station:
+                 20845, 20994, 20986
+
+So the two fields are enough. `stocks` plus `warehouse = {}` on a station
+construction's subconstruction produce a real `STOCK_LIST` and `WAREHOUSE`, and
+**both levels can reach it** - 20845 is our own subconstruction, standing in the
+catchment of a station 12 m above it and one at grade. Confirmed in game:
+*"the red indicators on both disappeared shortly"*, which is the engine
+re-evaluating and finding a route.
+
+Then they came back, so something further along is unhappy. Two station groups
+is still the state and still does not matter.
+
+### What the probe now reads
+
+Three additions, all of them the engine's own words rather than inference.
+
+`api.engine.util.stock.getCargoDeliveredPerYear(stockListEntity)` and
+`getCargoShippedPerYear` - whether anything has actually gone **into** and
+**out of** the store. This separates "reachable" from "used", which is the only
+distinction left worth making about the store itself.
+
+`api.engine.util.line.getLineStationProblems()` - reported per (line, station
+group) pair, so it names *which stop of which line* is unhappy, and
+`LineStationProblem` is specific where a red icon is not: `StopUseless`,
+`PassengerStopUseless`, `CargoStopUseless`, `AllPassengerStopUseless`,
+`CargoTypeUnloadUseless`, `CargoTypeLoadUseless` (`type.d.tl:2154-2161`).
+Alongside it `getLineProblems()` for the whole-line verdict - `NO_PATH`,
+`INCOMPATIBLE_STATIONS`, `BAD_ALTERNATIVE_TERMINAL` and so on
+(`LineProblem`, `type.d.tl:2144-2151`).
+
+`api.engine.util.line.getDetailedLineProblems(line)` - per stop, the `StopState`
+flags the summary does not carry: `empty`, `noPath`, `duplicateStop`,
+`incompatibleStop` (`util.d.tl:177-192`).
+
+The enum integers are decoded by reverse-mapping the `api.type` record that
+defines them, in a `pcall` - some of those records are native tables `pairs`
+refuses, and the bare number is still worth printing.
+
+## The store is reachable and unused, and the probe was hiding a failure
+
+    subconstruction 20845: stocks=1 capacity=500 warehouse=yes
+                           delivered/yr=0 shipped/yr=0
+
+Nothing has gone in or out. And **not one line problem printed**, which with red
+markers on screen is not a result, it is a bug in the probe: `try` returning nil
+cannot be told apart from a call that returned an empty list, so "the query
+failed" read as "no problems". Fixed with `tryX`, which returns the error text,
+and the two problem lists are now printed **unfiltered** with a count - filtering
+them by our own group entity is what produced silence, and entity identity
+across these APIs is not something to assume.
+
+### The leading hypothesis
+
+A `STORAGE_STOCK` holds cargo. It does not consume it. A route exists only if
+something at the far end *does*, and the planner will not unload a train into a
+buffer that leads nowhere.
+
+Both stations already reach the **same three** stocks - `cargoCatchables=3` each,
+all three shared. Two of them, 20994 and 20986, are not ours. Which means the
+rail station could already have delivered planks straight to either of them
+without any store at all, and has not - so neither wants planks. The concourse
+store adds a fourth place to put them, and that only helps if the truck line out
+of the lower level reaches something that consumes planks.
+
+So the next thing to read is what those stocks accept, by name. The probe now
+reports, for every stock either station can reach: its `StockListType`
+(`InputStock` consumes, `OutputStock` produces, `StorageStock` only holds -
+`type.d.tl:1900-1904`), its capacity, and the cargo types in its `cargoTypes`
+set, named through `api.res.cargoTypeRep.forEachCargoType` and `getName`
+(`res.d.tl:86`, `:23`).
+
+If nothing within reach is an `InputStock` for planks, this is a line-setup
+matter and not a mod one, and the mod's part - a transfer point both levels can
+use - is already done and verified.
+
+## No line problem anywhere, so it is not the lines
+
+    line problems world-wide: perStop=0 perLine=0
+
+The queries ran - no error text - and the engine reports **no line problem at
+all**, anywhere in the save. So whatever is red on screen is not a
+`LineProblem` or a `LineStationProblem`, and the whole "which stop is unhappy"
+line of enquiry is closed. Confirmed independently: the PLANKS truck line runs
+to a stop in Darwen's industrial district whose buildings accept planks, so the
+far end of the chain is sound.
+
+What the stocks in reach turned out to be:
+
+    stock 20845 (ours): 2 cap=500 [grain,dyes,fertilizer,sand,fish,meat]
+    stock 20994:        0 cap=2 [?]
+    stock 20986:        0 cap=2 [?]
+
+`StockListType` came out as a bare number, so those records are native tables
+that `pairs` will not walk - `enumName` falling back to the integer was the
+right call. From `type.d.tl:1900-1904` the order gives 0 = `InputStock`,
+1 = `OutputStock`, 2 = `StorageStock`. So ours is the storage buffer it should
+be, at 500, and there are two **consumers** of capacity 2 in reach as well. The
+six cargo names on ours are just the first six of the UNIVERSAL set, capped by
+the formatter.
+
+The `[?]` on the two consumers is the probe's fault, not a finding: a stock can
+be *assigned* a single `cargoType` instead of carrying a `cargoTypes` set - that
+is how a specialised warehouse bay and a town building's input work, and
+`api.cmd` has a command to set or reset it (`cmd.d.tl:799`). The probe never
+printed `cargoType`, so a healthy specialised stock looked empty.
+
+### The control that should settle it
+
+The save already contains a warehouse that works, between a truck station and a
+train station. So the probe now reports it: the first construction whose
+`fileName` contains `warehouse`, its stock list, its rule count, its
+delivered/shipped per year, and every stock through one shared `describeStock` -
+`StockListType`, capacity, assigned `cargoType` by name, `mixedTypes`, and the
+cargo set. The same formatter prints ours.
+
+A difference in any of those fields between a warehouse that moves planks and a
+concourse that does not is the answer. `rules` is the field to watch: a
+`StockList` has `rules` as well as `stocks` (`engine.d.tl:1152-1159`), the
+warehouse script never sets any, and whether a storage stock needs one to take
+part in routing is exactly the kind of thing that would not show up anywhere
+else.
+
+## It was the line all along, and the store is load-bearing anyway
+
+Resolved 2026-10-22. The train would not unload because **both stops of both
+lines were set to load planks**; the first stop needed to be the loading one and
+the second the unloading one. Nothing in the construction was ever responsible
+for the reported symptom, on the train line or the truck line.
+
+Worth being plain about what that means for the four rounds above, because the
+record should not read as four failed attempts:
+
+- **The phantom network at z = -7.0 was a real bug** and is fixed. Rail's
+  underpass model was landing in the street family's lists, so the upper level's
+  walkable network stopped at the foot of its own stairs and the interchange
+  lane joined rail to rail. That broke the *pedestrian* interchange, which is
+  T6 step 5, and it would have stayed invisible indefinitely - it has no
+  geometry.
+- **The identity-based prune was a wrong fix** to a correctly located problem,
+  and it was built to remove nothing if the diagnosis was wrong, which is what
+  happened.
+- **"Freight needs stock in catchment" is right**, and was reached for the
+  wrong reason. It is now the mechanism the station actually runs on.
+- The probe is how all of it got settled, and it should have existed earlier.
+  Construction logs cannot see entities.
+
+### The store is used, and is not optional here
+
+After the line fix, with the game running:
+
+    subconstruction 20845: stocks=1 capacity=500 warehouse=yes
+                           delivered/yr=0 shipped/yr=2 ... 38
+
+`shipped/yr` climbing while watching. The planks go train -> concourse store ->
+truck, and that is forced rather than preferred: the two levels are **two
+station groups**, one station each, with no join API, and freight does not pass
+between station groups. Without a shared stock there is nowhere for a crate to
+sit between the levels.
+
+`delivered/yr` stayed 0 throughout, so the two counters are not "in" and "out"
+of the same flow - `getCargoDeliveredPerYear` is documented as "delivered (to
+entity)" and evidently means something narrower than a vehicle unloading into a
+buffer. Do not read it as "nothing arrived".
+
+Strictly, "in use" is not "required"; the clean proof is to zero the capacity
+and watch freight stop. Not run, because two separate station groups plus a
+store that is visibly shipping is enough to act on.
+
+### Capacity settled at 100 per module
+
+Asked, 2026-10-22: *"Do we still need the warehouse or is it possible to
+function without this?"* - and, given the choice, *"keep, but smaller"*.
+`CONCOURSE_STOCK_CAPACITY` is now **100**, a fifth of a warehouse tile's 500,
+at half its load speed (1.0 against 2.0). Two concourses make 200: enough to
+buffer a train's worth of one cargo and no more. The point is that freight *can*
+change level, not that a station should be a distribution centre, and a real
+warehouse next door stays worth building.
+
+### Still to do
+
+- Remove `ml_probe.gs.lua` and `ml_probe.script.lua` before release. They are
+  marked temporary in both files.
+- T6 step 5 needs a walking observation: the numbers are right now, but nobody
+  has watched a passenger cross.
+
 ## Open questions
 
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
@@ -2836,9 +3770,11 @@ masonry, is in the root `NOTES.md` under "A reused mesh brings its UVs".
   click, and round seventeen's test is already written.
 - **Is the teleport a fallback for a missing path, or the only mechanism there
   is?** Open, 2026-10-22, and it decides whether `linkLevels` stays. The control
-  is one deploy: make the link inert and repeat the no-catchment interchange
-  test. See "The interchange works, and our pedestrian link is not what carries
-  it".
+  was going to be one deploy with the link made inert - but the freight crash
+  has done half the work: the link was never connected to the lower level at
+  all, so every transfer any session has seen happened **without** it. What is
+  left to learn is whether a link that is now genuinely connected changes
+  anything. See "The freight platform crash".
 - Does the engine reject construction geometry at z > 0 with no support beneath
   it? The roof at 5.5 m and the main buildings say no, but no stock construction
   puts a *track* up there.

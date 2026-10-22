@@ -649,6 +649,102 @@ local function liftSubconstruction(sub, xf)
 	sub.groundFaces = {}
 end
 
+--- Hand rail's construction-level models back to the rail family.
+---
+--- A rail *module* writes into the merged result, and nearly all of them open
+--- with `result = result.cargoStation` (`modules.script.lua:75`), so their
+--- geometry lands in rail's own subconstruction and the lift finds it. One does
+--- not. `trainstationutil.makeTrack` is handed the construction result and
+--- writes, once per track tile:
+---
+---     result.models[#result.models + 1] = {
+---         id = "/stations/rail/era_a/tn_underground_connection.mdl",
+---         transf = transf.mul(transform, transf.transl(vec3.new(0, 0, 0))),
+---         tag = tag,
+---     }                      -- trainstationutil.lua:38
+---
+--- In stock that is harmless: rail's hook copies **every** construction-level
+--- model into its own subconstruction (`modular_station.script.lua:1341`) and
+--- only then calls `addLaneLists`, which builds the model's person lanes there.
+--- Here the construction-level lists are *street's* - see `STREET_LEVEL_LISTS`
+--- for why they have to be - so rail's hook never sees the model, and street's
+--- hook buckets it into tag 2 and builds its lanes at grade instead.
+---
+--- `tn_underground_connection.mdl` is the rail station's pedestrian underpass:
+--- eight lane nodes at z = -7, the tunnel that joins the foot of one platform
+--- stair to the next. It is the only entry in the whole of
+--- `legacytransportnetworks.lua` with lane nodes that deep that is not part of
+--- an airport, which is why `z -7.0: 288 node(s) in 36 lane(s)` turned up under
+--- a station with 36 tracks: 36 x 8, one per tile.
+---
+--- So the upper level's walkable network was cut at the foot of its own stairs.
+--- Rail's own lanes stop at z = 5.0 - the stair feet, -7 lifted by 12 - and the
+--- tunnel that should carry on from there was left at grade, in the other
+--- family, twelve metres below. Nothing could cross, in either direction and
+--- for neither passengers nor freight. That is what `0 node(s) shared between
+--- the levels` and a train that will not unload have in common.
+---
+--- Moving the **model**, rather than its lanes, is what makes the rest fall
+--- out: rail's hook absorbs it, `addLaneLists` builds the lanes in rail's
+--- subconstruction, `liftRail` raises them with everything else, and street
+--- never builds its copy at all.
+---
+--- Must run **before** either hook. The window is between the module pass,
+--- which is what puts the model there, and street taking that list by
+--- reference.
+---
+--- Matched on the `/stations/rail/` prefix rather than on the one file name, so
+--- that any other rail model reaching construction level is moved too and named
+--- in the log. Our own supports (`multi_layer_stations_1::/`) and street's
+--- geometry do not match, and stay at grade.
+local function moveRailModelsToRail(streetResult, railResult)
+	local prefix = "/stations/rail/"
+	local models = streetResult.models
+	if models == nil then return end
+
+	local kept, taken, names = {}, {}, {}
+	for _i, m in ipairs(models) do
+		local id = type(m) == "table" and m.id or nil
+		if type(id) == "string" and string.sub(id, 1, #prefix) == prefix then
+			taken[#taken + 1] = m
+			names[id] = (names[id] or 0) + 1
+		else
+			kept[#kept + 1] = m
+		end
+	end
+
+	if #taken == 0 then
+		log.message(LOG .. "no rail models at construction level, so there is"
+			.. " nothing to hand back to the rail family. If the upper level's"
+			.. " person network still stops at the foot of its stairs, look for"
+			.. " a rail module writing somewhere other than `result.models`.")
+		return
+	end
+
+	-- Rewritten in place. The merged result and the street family point at this
+	-- same table, and street's hook is about to take it by reference.
+	for i = #models, 1, -1 do models[i] = nil end
+	for i = 1, #kept do models[i] = kept[i] end
+
+	railResult.models = railResult.models or {}
+	for _i, m in ipairs(taken) do
+		railResult.models[#railResult.models + 1] = m
+	end
+
+	local detail = {}
+	for id, n in pairs(names) do
+		detail[#detail + 1] = id .. " x" .. tostring(n)
+	end
+	table.sort(detail)
+	log.message(LOG .. "moved " .. tostring(#taken) .. " rail model(s) off the"
+		.. " construction level into the rail family, leaving "
+		.. tostring(#kept) .. ": " .. table.concat(detail, ", ")
+		.. ". A rail module added them through the merged result, which shares"
+		.. " street's lists, so street would have bucketed them into its tag 2"
+		.. " subconstruction and built their person lanes at grade. The"
+		.. " underpass belongs 12 m up, joined to the stair feet at z = 5.")
+end
+
 --- Lift only the rail family's share of the now-shared lists.
 ---
 --- Since all three parties point at the same tables, "which half is the rail
@@ -1701,6 +1797,104 @@ end
 --- (`CONCOURSE_FLANK`) and the catchment belongs over the entrance it serves.
 --- Through the frame rather than in world x, so a rotated or mirrored entrance
 --- comes out right.
+--- Capacity of the goods store a single concourse module provides.
+---
+--- A fifth of a warehouse tile's 500 at `loadSpeedModifier` 2.0
+--- (`warehouses/modules.script.lua:49`), and at half its load speed. The point
+--- of this store is that freight **can** change level at all - two station
+--- groups with no shared stock between them cannot exchange anything - not that
+--- a station should be a distribution centre. Two concourses make 200, which
+--- buffers a train's worth of one cargo and no more; anyone moving real volume
+--- should still want a real warehouse next door, and that stays worth building.
+---
+--- Chosen over 250 when asked, 2026-10-22: "keep, but smaller".
+local CONCOURSE_STOCK_CAPACITY = 100
+
+--- Give the station a goods store of its own, so freight can change level.
+---
+--- Freight does not pass from station to station. A station hands cargo to
+--- **stock in its own catchment** and takes cargo from stock in its own
+--- catchment - `catchmentAreaSystem.getStationCatchables(station, true)` is the
+--- engine's own list of what it can reach. Stock is an industry, a town
+--- building, or a warehouse.
+---
+--- Which is the whole reason freight would not cross this station. The probe of
+--- 2026-10-22 confirmed the two levels are **two station groups**, one station
+--- each (`stationGroupSystem.getStationGroup`), with no API to join them -
+--- `cmd.d.tl` has no join or merge command. Both stations were entirely
+--- capable, `cargoUnload` true on every terminal with a freight transfer
+--- entry; there was simply nowhere between them to put a crate down. The stock
+--- answer is to stand a warehouse in the shared catchment, and asked directly,
+--- 2026-10-22: *"Is it possible to integrate warehouse functionality in the
+--- concourse?"*
+---
+--- It is, and none of it is new machinery. A warehouse is stock and nothing
+--- else - `warehouses/warehouse.script.lua` declares no station, no terminal
+--- and no catchment, only
+---
+---     result.subconstructions[1].stocks     -- :331, STORAGE_STOCK entries
+---     result.subconstructions[1].warehouse = { }
+---
+--- and those two fields are what produce the `STOCK_LIST` and `WAREHOUSE`
+--- components (`engine.d.tl:1200`, `:1670`). So a subconstruction of ours can
+--- carry them, and it stands inside both levels' catchment by construction.
+---
+--- `UNIVERSAL` with `mixedTypes` is the universal warehouse's own
+--- configuration (`warehouse.script.lua:272-285`), and `UNIVERSAL` is every
+--- freight class in the game - so this accepts anything but passengers, which
+--- is what a transfer store between a railway and a road should do.
+---
+--- Attached to the street family's **catch-all** subconstruction, not to either
+--- station's. It is the one that already holds the concourse's own geometry, so
+--- it has models and therefore a position for the catchment query to find,
+--- and putting `STATION` and `WAREHOUSE` on one entity is a combination the
+--- base game never ships.
+local function addConcourseStock(result, modules)
+	local n = 0
+	for _i, slot in ipairs(result.slots or {}) do
+		local entry = modules[slot.id]
+		if slot.type == CONCOURSE_TYPE and entry ~= nil and type(entry) == "table" then
+			n = n + 1
+		end
+	end
+	if n == 0 then return 0, 0 end
+
+	-- Geometry but no station: street's tag 2 bucket. Lowest tag first, so the
+	-- choice is stable if another ever qualifies.
+	local host = nil
+	for _i, sub in ipairs(result.subconstructions or {}) do
+		if sub.station == nil and #(sub.models or {}) > 0
+			and (host == nil or (sub.tag or 0) < (host.tag or 0)) then
+			host = sub
+		end
+	end
+	if host == nil then
+		log.warning(LOG .. "no subconstruction with geometry and no station of"
+			.. " its own, so the concourse goods store has nowhere to live."
+			.. " Freight will not be able to change level here.")
+		return 0, 0
+	end
+
+	local capacity = CONCOURSE_STOCK_CAPACITY * n
+	host.stocks = host.stocks or {}
+	host.stocks[#host.stocks + 1] = {
+		type = "STORAGE_STOCK",
+		cargoTypes = {
+			cargoClassesIncluded = { "UNIVERSAL" },
+			cargoTypesExcluded = { "::/cargos/passengers/passengers.cargo" },
+		},
+		mixedTypes = true,
+		capacity = capacity,
+		loadSpeedModifier = 1.0,
+	}
+	-- No `loadIndicators`: those are model indices for the crate stacks a
+	-- warehouse draws, and the concourse has no crate art. The store works
+	-- without them, it just does not show its contents.
+	host.warehouse = host.warehouse or {}
+
+	return capacity, host.tag or 0
+end
+
 local function applyConcourse(result, stations, modules)
 	-- **Only our own slots.** Both sweeps below would otherwise pick up the
 	-- stock building modules as well - they declare the same
@@ -1741,6 +1935,126 @@ local function applyConcourse(result, stations, modules)
 	end
 
 	return #circles, passCap
+end
+
+--- What the engine was actually told about each station, in one line.
+---
+--- Written for the cargo question of 2026-10-22: *"cargo transfer does not seem
+--- to be working as expected... I suspect the problem is that there is no cargo
+--- pool"*. The result carries no answer to that question anywhere a reader can
+--- see it, and the reason is that **nothing marks a station as a cargo
+--- station**:
+---
+--- - `api.type.Station` is `tag`, `terminals`, `catchmentAreas` and `pool`, and
+---   nothing else (`api/tealdef/api/type.d.tl:1318`);
+--- - `api.type.CatchmentArea` is a position and a radius, so a circle has no
+---   kind. `constructionutil.addCatchmentCircles(passengerStation, cargoStation,
+---   ...)` reads `catchmentPassenger` and `catchmentCargo` off the modules, but
+---   all it decides is *which station record* a circle lands on - and both stock
+---   hosts here pass the **same** record for both arguments
+---   (`modular_station.script.lua:1359`, `modular_terminal.script.lua:3240`);
+--- - the pool is one integer. `metadata.moreCapacity.cargo` is summed by
+---   `modulesutil.getStationPoolCapacities`, but no module in the install sets
+---   it, rail throws the number away (`capacity = passCap`) and street adds it
+---   to the same single `pool.capacity`. There is no second pool to fill.
+---
+--- What does make a station carry cargo is its **terminals**: each one's
+--- `cargoTransferSpeeds` names the cargo classes it can transfer, and
+--- `Terminal.cargoLoad` / `passengersLoad` follow from that. So "is this a
+--- cargo station?" can only be answered by reading the terminals back out,
+--- which is what this does.
+local function logStations(result)
+	local parts = {}
+	for _i, sub in ipairs(result.subconstructions or {}) do
+		local st = sub.station
+		if st ~= nil then
+			-- Over all terminals: which classes appear at all, and how many
+			-- terminals can take cargo as opposed to passengers. A terminal can
+			-- be both, so the two counts are not a partition of the first.
+			-- Per class, the **transfer capability** and not just the
+			-- permission: `length` is the length of terminal section serving
+			-- that class and `loadSpeedModifier` scales the rate
+			-- (`type.d.tl:1297-1304`). The rail host accumulates 40 m per
+			-- cargo platform tile and sets the modifier to 1 for UNIVERSAL or
+			-- 2 for a typed platform (`modular_station.script.lua:1042-1049`).
+			-- A class listed with length 0 is a terminal that accepts the
+			-- cargo and can never move a crate of it, which looks from the
+			-- cab like a train refusing to unload.
+			local seen, classes, lengths, speeds = {}, {}, {}, {}
+			local nCargo, nPass = 0, 0
+			-- The wait area is what lets anything board at all: `personEdges`
+			-- are the lane edges cargo and passengers stand on
+			-- (`type.d.tl:1278`), so a terminal with none is a stop a vehicle
+			-- can pull up to and nothing can be handed over at. `capacity` is
+			-- filled in by `constructionutil.addStationCapacities`, which both
+			-- stock hooks call for themselves - but only for terminals whose
+			-- own `passengers` flag is set, so a **cargo** terminal with no
+			-- capacity is stock's normal and not a finding. It overflows into
+			-- the pool, which is shared and untyped.
+			local noEdges, cargoNoEdges, edges = 0, 0, 0
+			for _j, terminal in ipairs(st.terminals or {}) do
+				local cargo, pass = false, false
+				for _k, speed in ipairs(terminal.cargoTransferSpeeds or {}) do
+					local set = speed.cargoTypeSet or {}
+					for _l, class in ipairs(set.cargoClassesIncluded or {}) do
+						if not seen[class] then
+							seen[class] = true
+							classes[#classes + 1] = class
+						end
+						lengths[class] = (lengths[class] or 0) + (speed.length or 0)
+						speeds[class] = speed.loadSpeedModifier or 0
+						if class == "PASSENGERS" then pass = true
+						else cargo = true end
+					end
+				end
+				if cargo then nCargo = nCargo + 1 end
+				if pass then nPass = nPass + 1 end
+
+				local nEdges = #(terminal.personEdges or {})
+				edges = edges + nEdges
+				if nEdges == 0 then
+					noEdges = noEdges + 1
+					if cargo then cargoNoEdges = cargoNoEdges + 1 end
+				end
+			end
+
+			local radii = {}
+			for _j, circle in ipairs(st.catchmentAreas or {}) do
+				radii[#radii + 1] = string.format("%.0f", circle.radius or 0.0)
+			end
+
+			local transfer = {}
+			for _j, class in ipairs(classes) do
+				transfer[#transfer + 1] = string.format("%s %.0fm x%.3g", class,
+					lengths[class] or 0, speeds[class] or 0)
+			end
+
+			local pool = st.pool or {}
+			parts[#parts + 1] = string.format(
+				"tag %s: %d terminal(s), %d taking cargo, %d taking passengers,"
+				.. " classes %s; %d catchment circle(s) r=%s; pool capacity %s"
+				.. " over %d edge(s); wait areas: %d person edge(s) over the"
+				.. " terminals, %d terminal(s) with none (%d of those take cargo);"
+				.. " transfer %s",
+				tostring(sub.tag), #(st.terminals or {}), nCargo, nPass,
+				#classes > 0 and table.concat(classes, "+") or "none",
+				#(st.catchmentAreas or {}),
+				#radii > 0 and table.concat(radii, "/") or "-",
+				tostring(pool.capacity or 0), #(pool.edges or {}),
+				edges, noEdges, cargoNoEdges,
+				#transfer > 0 and table.concat(transfer, ", ") or "-")
+		end
+	end
+	if #parts > 0 then
+		log.message(LOG .. "station records: " .. table.concat(parts, " | ")
+			.. ". A station takes cargo only if a terminal's"
+			.. " cargoTransferSpeeds say so - the catchment circles and the"
+			.. " pool are untyped and serve both. UNIVERSAL is every freight"
+			.. " type in the game: each `*.cargo.lua` lists UNIVERSAL plus one"
+			.. " of BULK/LIQUID/FLATBED/GOODS, and only passengers sit outside"
+			.. " it. So an untyped cargo platform accepts everything a typed"
+			.. " one does.")
+	end
 end
 
 --- Placeholder art: a pier either side of the road, carrying a deck slab that
@@ -2910,6 +3224,16 @@ end
 --- exact, so this is only used the conservative way round: a near-match counts
 --- as a match and the candidate is rejected. Over-rejecting costs a warning;
 --- under-rejecting costs an assertion failure on the simulation thread.
+--- The per-family subconstruction tag bases, 100 apart.
+---
+--- Named because `findLevelNodes` reads them too: a subconstruction's tag is
+--- the only thing that says which **level** its lanes belong to, once they have
+--- all been lifted into construction space. Frozen at the first public release,
+--- because a tag is how a savegame's subconstruction is recognised after a
+--- rebuild - see `finish`.
+local STREET_TAG_BASE = 1
+local RAIL_TAG_BASE = 101
+
 local function nodeKey(p)
 	return string.format("%.2f,%.2f,%.2f", p[1], p[2], p[3])
 end
@@ -2929,6 +3253,73 @@ end
 --- latent coincidence into a fatal one. So those positions are excluded as
 --- link endpoints, and a station with no safe endpoint gets a warning and no
 --- link rather than a crash.
+--- Every pair of person nodes an existing lane **already joins**, both ways
+--- round.
+---
+--- This exists because of a crash, and the crash is worth the paragraph.
+--- Reported 2026-10-22: *"Placing a freight platform crashed the game."* The
+--- report file says
+---
+---     Duplicate edge error, TransportNetworkSystem.cpp:299 CheckDuplicateEdges
+---     Error at position (-2310.45, 964.96, 13.73) and (-2310.45, 964.96, 5.63)
+---     (tangents are (0, 0, -8.1) (0, 0, -8.1)) types: 0000000000000001
+---
+--- - a vertical 8.1 m `PERSON` edge, present twice. 8.1 m is exactly the span
+--- `linkLevels` logs, so one of the two was ours.
+---
+--- The cause is in `findLevelNodes`' own scoring. It picks the closest pair in
+--- **plan**, so a pair sharing an (x, y) scores zero and always wins - and the
+--- pair that most reliably shares an (x, y) is *the two ends of a lane that is
+--- already there*. Adding a second lane between them is then a duplicate edge,
+--- which is fatal rather than merely redundant. A freight platform is what
+--- exposed it: the pairs chosen before were coincident in plan but unconnected,
+--- so no duplicate was ever emitted.
+---
+--- Treating every **consecutive** pair of nodes in a lane as joined
+--- over-detects, because `laneutil.createLane` makes two nodes per curve and a
+--- multi-curve lane is therefore pairs rather than a chain. That is the safe
+--- direction: an over-detected edge costs one candidate pair out of tens of
+--- thousands, and a missed one costs the game.
+---
+--- The crossing count it also returns was meant to answer "does anything of
+--- stock's already join the levels?", and does not: an edge belongs to one
+--- lane list and a lane list to one subconstruction, so an edge straddling the
+--- midpoint is a stub inside one family, not a connection between two. It is
+--- kept because a rail lane that dives 8 m below its own deck is worth seeing
+--- in the log, but `findLevelNodes` answers the real question by counting
+--- **shared nodes**.
+local function personEdgeKeys(result, dz)
+	local keys = {}
+	local crossing, example = 0, nil
+	local mid = dz * 0.5
+	for _i, sub in ipairs(result.subconstructions or {}) do
+		for _j, lane in ipairs(sub.laneLists or {}) do
+			if isPersonLane(lane) then
+				local prev, prevP = nil, nil
+				for _k, node in ipairs(lane.nodes or {}) do
+					local p = applyMat(lane.transf, node[1])
+					local k = nodeKey(p)
+					if prev ~= nil then
+						keys[prev .. "|" .. k] = true
+						keys[k .. "|" .. prev] = true
+						if (prevP[3] <= mid) ~= (p[3] <= mid) then
+							crossing = crossing + 1
+							if example == nil then
+								example = string.format(
+									"(%.1f,%.1f,%.1f) -> (%.1f,%.1f,%.1f)",
+									prevP[1], prevP[2], prevP[3],
+									p[1], p[2], p[3])
+							end
+						end
+					end
+					prev, prevP = k, p
+				end
+			end
+		end
+	end
+	return keys, crossing, example
+end
+
 local function vehicleNodeKeys(result)
 	local keys = {}
 	for _i, sub in ipairs(result.subconstructions or {}) do
@@ -2941,6 +3332,39 @@ local function vehicleNodeKeys(result)
 		end
 	end
 	return keys
+end
+
+--- The z values a set of person nodes occupies, as "min..max" plus the three
+--- commonest values and their counts.
+---
+--- A level that is one walkable surface should read as one value. Anything else
+--- is a stub hanging off that surface, and picking a stub as the end of the
+--- interchange lane is how the link came to run from 7 m underground: the
+--- `linked levels:` line has read `street (32.5,0.0,-7.0)` since the tag-based
+--- classification went in, and nothing said whether -7 was a real place to
+--- stand or a dead end inside the ground.
+local function zSpread(nodes)
+	local counts, order = {}, {}
+	local lo, hi = nil, nil
+	for _i, p in ipairs(nodes) do
+		local z = p[3]
+		if lo == nil or z < lo then lo = z end
+		if hi == nil or z > hi then hi = z end
+		local k = string.format("%.1f", z)
+		if counts[k] == nil then
+			counts[k] = 0
+			order[#order + 1] = k
+		end
+		counts[k] = counts[k] + 1
+	end
+	table.sort(order, function(a, b) return counts[a] > counts[b] end)
+	local top = {}
+	for i = 1, math.min(3, #order) do
+		top[i] = order[i] .. " x" .. tostring(counts[order[i]])
+	end
+	return string.format("%.1f..%.1f, %d distinct, commonest %s",
+		lo or 0.0, hi or 0.0, #order,
+		#top > 0 and table.concat(top, " / ") or "-")
 end
 
 --- Pick one pedestrian node at grade and one on the elevated platform.
@@ -2957,14 +3381,64 @@ local function findLevelNodes(result, dz)
 	local avoid = vehicleNodeKeys(result)
 	local rejected = 0
 
+	-- **Which level a node belongs to is its subconstruction's tag, not its z.**
+	--
+	-- Height was the obvious test and it is wrong, which the freight-platform
+	-- crash is what finally showed. Rail's lanes are lifted wholesale by
+	-- `liftLanes`, and some of them hang *below* the deck: a platform addon -
+	-- the stairs or underpass - descends about 8 m from the platform, so after
+	-- the lift its bottom node sits at **z = +5**, five metres in the air and
+	-- comfortably under any midpoint test. `p[3] > dz * 0.5` therefore filed
+	-- that node as "grade", and since it shares an (x, y) with its own upper
+	-- end, the closest-pair-in-plan search picked the two ends of one stock
+	-- lane and drew a second lane between them.
+	--
+	-- Two bugs in one, and the duplicate is only the louder:
+	--
+	--  * the engine calls a second edge between the same two nodes a duplicate
+	--    and dies - `personEdgeKeys` below is the guard for that;
+	--  * and the link has therefore been joining **rail to rail** all along.
+	--    Every session's `linked levels:` line reads `-> (…,5.0) -> (…,13.1)`,
+	--    which is the addon stub at both ends. It never reached the street
+	--    level, which is the one thing it exists to do, and that is the best
+	--    explanation yet of why passengers transfer by teleporting (T6 step 5).
+	--
+	-- A tag says which family a subconstruction came from and survives the
+	-- lift, so it is the honest test.
+	-- Per subconstruction and per lane list as well as per level, because
+	-- "288 of the 430 street nodes are at z = -7.0" was not something either
+	-- family's models could explain: nothing in
+	-- `street/modular_street_station/*.mdl` has geometry within metres of -7.
+	-- So the depth is coming from a lane's `transf`, and which subconstruction
+	-- and which lane list it is, is the whole question.
+	local byTag = {}
+	local function note(tag, laneIndex, p)
+		local key = tostring(tag)
+		local bucket = byTag[key]
+		if bucket == nil then
+			bucket = { nodes = {}, lanes = {} }
+			byTag[key] = bucket
+		end
+		bucket.nodes[#bucket.nodes + 1] = p
+		local zKey = string.format("%.1f", p[3])
+		local lanes = bucket.lanes[zKey]
+		if lanes == nil then
+			lanes = {}
+			bucket.lanes[zKey] = lanes
+		end
+		lanes[laneIndex] = (lanes[laneIndex] or 0) + 1
+	end
+
 	for _i, sub in ipairs(result.subconstructions or {}) do
+		local isRail = (sub.tag or 0) >= RAIL_TAG_BASE
 		for _j, lane in ipairs(sub.laneLists or {}) do
 			if isPersonLane(lane) then
 				for _k, node in ipairs(lane.nodes or {}) do
 					local p = applyMat(lane.transf, node[1])
+					note(sub.tag, _j, p)
 					if avoid[nodeKey(p)] then
 						rejected = rejected + 1
-					elseif p[3] > dz * 0.5 then
+					elseif isRail then
 						highNodes[#highNodes + 1] = p
 					else
 						lowNodes[#lowNodes + 1] = p
@@ -2979,15 +3453,96 @@ local function findLevelNodes(result, dz)
 			.. " that coincide with a vehicle lane node")
 	end
 
-	local best, bestLow, bestHigh = nil, nil, nil
+	-- A pair an existing lane already joins must not be picked: a second lane
+	-- between the same two nodes is a duplicate edge, and the engine treats
+	-- that as fatal. See `personEdgeKeys`.
+	-- **Does anything of stock's already join the levels?** An *edge* cannot
+	-- answer that, and reading it that way was wrong: a lane list belongs to
+	-- exactly one subconstruction, so no stock edge spans the two families.
+	-- What joins them is a node they **share** - the engine welds person nodes
+	-- that coincide - so the test is a coincidence test over the two candidate
+	-- sets, which the tag now separates honestly.
+	--
+	-- This replaces the "existing person lane(s) already cross between the
+	-- levels: 90 edge(s)" line, which counted edges straddling z = dz/2 within
+	-- one family. Its own example gave it away - `(80.0,27.5,13.1) ->
+	-- (80.0,27.5,5.0)` is a rail platform addon descending from the deck, both
+	-- ends rail. T6 step 5 was half-answered on the strength of it; it should
+	-- be asked again.
+	local highKeys = {}
+	for _i, hi in ipairs(highNodes) do highKeys[nodeKey(hi)] = true end
+	local shared = 0
 	for _i, lo in ipairs(lowNodes) do
+		if highKeys[nodeKey(lo)] then shared = shared + 1 end
+	end
+	log.message(LOG .. "person nodes: " .. tostring(#lowNodes) .. " street (z "
+		.. zSpread(lowNodes) .. "), " .. tostring(#highNodes) .. " rail (z "
+		.. zSpread(highNodes) .. "); " .. tostring(shared)
+		.. " node(s) shared between the levels. Zero shared means the lane we"
+		.. " draw is the only way across, so it had better end somewhere a"
+		.. " person can stand.")
+
+	local tagKeys = {}
+	for key, _bucket in pairs(byTag) do tagKeys[#tagKeys + 1] = key end
+	table.sort(tagKeys, function(a, b) return tonumber(a) < tonumber(b) end)
+	for _i, key in ipairs(tagKeys) do
+		local bucket = byTag[key]
+		local zKeys = {}
+		for zKey, _lanes in pairs(bucket.lanes) do zKeys[#zKeys + 1] = zKey end
+		table.sort(zKeys, function(a, b) return tonumber(a) > tonumber(b) end)
+		local detail = {}
+		for _j, zKey in ipairs(zKeys) do
+			local n, lanes = 0, 0
+			for _laneIndex, count in pairs(bucket.lanes[zKey]) do
+				n = n + count
+				lanes = lanes + 1
+			end
+			detail[#detail + 1] = string.format("z %s: %d node(s) in %d lane(s)",
+				zKey, n, lanes)
+		end
+		log.message(LOG .. "  person nodes of subconstruction tag " .. key
+			.. " (" .. tostring(#bucket.nodes) .. "): "
+			.. table.concat(detail, "; "))
+	end
+
+	local joined, crossing, crossingExample = personEdgeKeys(result, dz)
+	if crossing > 0 then
+		log.message(LOG .. "person edge(s) straddling z = "
+			.. string.format("%.1f", dz * 0.5) .. " inside a single family: "
+			.. tostring(crossing) .. ", e.g. " .. tostring(crossingExample)
+			.. ". Not an interchange - see the shared-node count above")
+	end
+	local best, bestLow, bestHigh, alreadyJoined, flat = nil, nil, nil, 0, 0
+	for _i, lo in ipairs(lowNodes) do
+		local loKey = nodeKey(lo)
 		for _j, hi in ipairs(highNodes) do
 			local dx, dy = hi[1] - lo[1], hi[2] - lo[2]
 			local d = dx * dx + dy * dy
 			if best == nil or d < best then
-				best, bestLow, bestHigh = d, lo, hi
+				if joined[loKey .. "|" .. nodeKey(hi)] then
+					alreadyJoined = alreadyJoined + 1
+				elseif hi[3] - lo[3] < dz * 0.5 then
+					-- Not a climb between levels. With the families separated
+					-- this should not happen, so it is counted rather than
+					-- silently skipped.
+					flat = flat + 1
+				else
+					best, bestLow, bestHigh = d, lo, hi
+				end
 			end
 		end
+	end
+	if flat > 0 then
+		log.message(LOG .. "skipped " .. tostring(flat) .. " candidate pair(s)"
+			.. " that climbed less than " .. string.format("%.1f", dz * 0.5)
+			.. " m - a lane between them would not be an interchange")
+	end
+
+	if alreadyJoined > 0 then
+		log.message(LOG .. "skipped " .. tostring(alreadyJoined)
+			.. " better-scoring candidate pair(s) an existing person lane"
+			.. " already joins - a second lane between the same two nodes is a"
+			.. " duplicate edge, which the engine treats as fatal")
 	end
 
 	return bestLow, bestHigh, #lowNodes, #highNodes
@@ -3022,10 +3577,13 @@ local function linkLevels(result, dz)
 		{ { { lo[1], lo[2], lo[3] }, { hi[1], hi[2], hi[3] } } },
 		{ "PERSON" }, 2, 2, false)
 
-	log.message(LOG .. "linked levels: (" .. string.format("%.1f,%.1f,%.1f", lo[1], lo[2], lo[3])
-		.. ") -> (" .. string.format("%.1f,%.1f,%.1f", hi[1], hi[2], hi[3])
-		.. "), from " .. tostring(nLow) .. " grade and " .. tostring(nHigh)
-		.. " elevated person nodes")
+	log.message(LOG .. "linked levels: street (" .. string.format("%.1f,%.1f,%.1f", lo[1], lo[2], lo[3])
+		.. ") -> rail (" .. string.format("%.1f,%.1f,%.1f", hi[1], hi[2], hi[3])
+		.. "), a climb of " .. string.format("%.1f", hi[3] - lo[3])
+		.. " m, from " .. tostring(nLow) .. " street and " .. tostring(nHigh)
+		.. " rail person nodes. The ends are chosen by subconstruction tag, not"
+		.. " by height: a lifted platform addon hangs at z = 5 and used to"
+		.. " count as grade")
 end
 
 --- Final tidy-up after both hooks. The lists are already shared, so there is
@@ -3052,7 +3610,8 @@ local function finish(result, streetResult, railResult, modules)
 	-- **Frozen at the first public release**: a tag is how a savegame's
 	-- subconstruction is recognised after a rebuild.
 	result.subconstructions = {}
-	for _i, src in ipairs({ { streetResult, 1, STREET_DIR }, { railResult, 101, nil } }) do
+	for _i, src in ipairs({ { streetResult, STREET_TAG_BASE, STREET_DIR },
+			{ railResult, RAIL_TAG_BASE, nil } }) do
 		local base = src[2]
 		for j, sub in ipairs(src[1].subconstructions or {}) do
 			sub.tag = base + j - 1
@@ -3100,6 +3659,16 @@ local function finish(result, streetResult, railResult, modules)
 		log.message(LOG .. "concourse: " .. tostring(nCircles)
 			.. " catchment circle(s) and +" .. tostring(poolAdded)
 			.. " pool capacity on each of " .. tostring(#stations) .. " stations")
+	end
+
+	local stockCap, stockTag = addConcourseStock(result, modules or {})
+	if stockCap > 0 then
+		log.message(LOG .. "concourse goods store: " .. tostring(stockCap)
+			.. " of UNIVERSAL storage on subconstruction tag "
+			.. tostring(stockTag) .. ", marked as a warehouse. This is what"
+			.. " lets freight change level: a station hands cargo to stock in"
+			.. " its own catchment, never to another station, and both levels'"
+			.. " catchment covers this.")
 	end
 
 	for _i, sub in ipairs(result.subconstructions or {}) do
@@ -3566,6 +4135,11 @@ return {
 			-- Each family's hook closes over its own result table, but those
 			-- tables now point at the same lists, so both assemble into one
 			-- place and whichever runs second sees the other's work.
+			-- Before either hook. The module pass has left rail's
+			-- underpass model in the shared - street's - model list, and
+			-- street's hook is what buckets that list and builds its lanes.
+			moveRailModelsToRail(streetResult, railResult)
+
 			if streetHook ~= nil then streetHook(...) end
 			if railHook ~= nil then railHook(...) end
 
@@ -3595,6 +4169,7 @@ return {
 				.. tostring(#(result.slots or {})) .. " slots, "
 				.. tostring(#(result.edgeLists or {})) .. " edge lists, rail at +"
 				.. tostring(PITCH))
+			logStations(result)
 		end
 
 		return result
