@@ -36,8 +36,8 @@ return {
 	description = {
 		name = _("Station Concourse"),
 		description = _("Spans the entrance road and serves both levels. Provides the station's passenger catchment and waiting capacity - a multi-layer station needs at least one to attract passengers at all."),
-		icon = "::/stations/rail/modular_station/main_building_1_era_c.tga",
-		previewIcon = "::/stations/rail/modular_station/main_building_1_era_c_preview@2x.tga",
+		icon = "multi_layer_stations_1::/ml_concourse.tga",
+		previewIcon = "multi_layer_stations_1::/ml_concourse_preview.tga",
 		attributes = {
 			cost = { 30000, -1 },
 			maintenanceCost = { 5000, -1 },

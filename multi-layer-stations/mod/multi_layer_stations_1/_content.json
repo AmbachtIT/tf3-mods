@@ -9,6 +9,12 @@
         "category_ml_station.res.lua",
         "category_ml_station@2x.tga",
         "category_ml_modules.res.lua",
-        "category_ml_modules@2x.tga"
+        "category_ml_modules@2x.tga",
+        "ml_station@2x.tga",
+        "ml_station_preview@2x.tga",
+        "ml_support@2x.tga",
+        "ml_support_preview@2x.tga",
+        "ml_concourse@2x.tga",
+        "ml_concourse_preview@2x.tga"
     ]
 }

@@ -16,8 +16,8 @@ return {
 	description = {
 		name = _("Elevated Support"),
 		description = _("A brick support under the elevated level. Place these to carry the platforms above; leave gaps where roads need to pass through."),
-		icon = "::/stations/rail/modular_station/stairs.tga",
-		previewIcon = "::/stations/rail/modular_station/stairs_preview@2x.tga",
+		icon = "multi_layer_stations_1::/ml_support.tga",
+		previewIcon = "multi_layer_stations_1::/ml_support_preview.tga",
 		attributes = {
 			cost = { 8000, -1 },
 			maintenanceCost = { 400, -1 },

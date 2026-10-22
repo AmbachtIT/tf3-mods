@@ -691,6 +691,42 @@ texture '::/placeholders/mat/tex/unkown_texture.dds'`, which is the placeholder
 material arriving (the misspelling is the game's).
 
 
+## The three menu image formats, measured
+
+**Measured 2026-10-22** off the stock files `multi-layer-stations` had been
+borrowing, when it got placeholders of its own. A mod that ships menu art needs
+three different formats, and nothing in the install documents them:
+
+| what | referenced by | size | format |
+| --- | --- | --- | --- |
+| menu tile | `description.icon` | 240 x 150 | 32bpp **BGRA**, TGA type 2, descriptor 0x08, bottom-up |
+| side-panel preview | `description.previewIcon` | 720 x 405 | 24bpp **BGR**, TGA type 2, descriptor 0x00, bottom-up |
+| category button | a `menu_category`'s `icon` | 48 x 48 | 8bpp **greyscale**, TGA type 3 |
+
+All three are uncompressed TGA with the 26-byte v2 footer
+(` ` * 8 + `TRUEVISION-XFILE.` + ` `), which every stock file carries. The
+sizes are exact: a generated file of the right dimensions comes out at 144044,
+874844 and 2322 bytes respectively, the same as the stock files, which is a
+usable offline check that the format is right before the game ever sees it.
+
+Two conventions that are easy to get wrong:
+
+- **The `@2x` suffix is the engine's, not part of the name.** Ship
+  `wh_bulk_preview@2x.tga` and ask for `::/warehouses/icons/wh_bulk_preview.tga` -
+  that is stock's own pairing, and only the `@2x` variant ships. The same holds
+  for a `menu_category`'s `resolve("category_x.tga")`.
+- **The tile has alpha and the preview does not.** A preview drawn with
+  transparency shows black where it should show background, because 24bpp has
+  nowhere to put the alpha. Stock previews are fully opaque; some are 1920x1080
+  or 1080x608 32bpp instead, so the engine tolerates more than one size, but
+  720 x 405 at 24bpp is what the station and module previews use.
+
+Some stock previews are photographic renders. They do not have to be: the
+engine scales whatever it is given, so generated placeholder art is a legitimate
+shipping state - and a placeholder that names the file and format that would
+replace it (`tools/make_menu_art.py`) is how you ask for better.
+
+
 ## A mod can add its own build-menu categories
 
 **Confirmed in-game 2026-10-22** with `multi-layer-stations`, which now has a

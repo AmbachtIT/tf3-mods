@@ -46,8 +46,8 @@ local function makeConstructionTemplates()
 			description = {
 				name = _("Multi-layer Station"),
 				description = _("An elevated train platform over a bus platform at street level. Two stations in one structure: connect a road to the lower level and a track to the upper one."),
-				icon = "::/stations/rail/modular_station/station_era_c.tga",
-				previewIcon = "::/stations/rail/modular_station/station_era_c_preview.tga",
+				icon = "multi_layer_stations_1::/ml_station.tga",
+				previewIcon = "multi_layer_stations_1::/ml_station_preview.tga",
 				attributes = {
 					noise = { 25, -1 },
 					pollution = { 45, 350 },
@@ -103,8 +103,13 @@ return {
 		-- these have to be real resources all the same: an empty string here
 		-- produces `Texture error: Could not find texture ''`, which is
 		-- indistinguishable in the log from the engine's own instance of it.
-		icon = "::/stations/rail/modular_station/station_era_c.tga",
-		previewIcon = "::/stations/rail/modular_station/station_era_c_preview.tga",
+		-- Our own placeholder art, not the stock era-c station's, as of
+		-- 2026-10-22. Referenced **without** the `@2x` the files carry: the
+		-- engine appends it, which is how stock does it too - `wh_bulk.module.lua`
+		-- asks for `::/warehouses/icons/wh_bulk_preview.tga` and only
+		-- `wh_bulk_preview@2x.tga` ships. See `tools/make_menu_art.py`.
+		icon = "multi_layer_stations_1::/ml_station.tga",
+		previewIcon = "multi_layer_stations_1::/ml_station_preview.tga",
 		attributes = {
 			noise = { 25, -1 },
 			pollution = { 45, 350 },
