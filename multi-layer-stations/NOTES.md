@@ -2286,6 +2286,66 @@ all six templates live from 1980 - so it is either where the upgrade tool gets
 its list from or something about the pairing of types, and it is a question for a
 later session. Standard and catenary are enough for v0.1.
 
+## The interchange works, and our pedestrian link is not what carries it
+
+**Measured in-game 2026-10-22**, with the test designed in that session rather
+than the one `TESTS.md` prescribed, and it is the better test: a station built
+with **nothing in its catchment**, a bus line to a town at one end and a train
+line to a station at the other. A station with an empty catchment generates
+nobody, so every passenger on a platform arrived on one line and is leaving on
+the other, and throughput *is* the proof. It answers T5b and T6 steps 3 and 4 in
+one run.
+
+Result: **passengers transfer in both directions**, train to bus and bus to
+train. T6's release blocker is closed - the levels are not isolated.
+
+### And they teleport, which is the interesting half
+
+They are not seen walking between the levels. The transfer is instant.
+
+The player's reading, which the root `NOTES.md` now records as engine behaviour:
+the teleport is a fallback, because **a stock station with an island platform
+and no passenger underpass works too**. The game does not strand passengers on a
+platform it has no authored path to.
+
+That inverts what this test was thought to establish. It does *not* confirm
+`linkLevels`; it is positive evidence that **nothing walks our lane**, and the
+interchange would very likely work without it. Two readings are left and they
+are not distinguishable from anything observed so far:
+
+1. **The engine never needed the lane.** Interchange inside a StationGroup is
+   abstract, and the lane is decoration that happens to sit where stairs would.
+2. **The lane is the connection and the walk is not animated.** Ours is a single
+   straight segment climbing 8 m with no intermediate nodes, which is not a
+   shape any stock person lane has.
+
+### Which makes "do we keep it" the question, before "where do we put it"
+
+Phase 10 step 2 was going to anchor the link at the concourse, for determinism
+and to put it where the stairs art goes. That is still the right change *if the
+link stays*, but the order of the two decisions has swapped, because the link is
+not free:
+
+- it is the **only known hard-crash path in this mod** - the
+  `TransportNetworkSystem.cpp:116` assertion on a `PERSON` node coinciding with
+  a vehicle one, which `vehicleNodeKeys` exists to dodge and which the root
+  notes call unsurvivable, and
+- if reading 1 is right it buys nothing functional in exchange.
+
+The control test is cheap and decisive, and it is one deploy and one run: make
+`linkLevels` inert - an early return, keeping the diagnostics - and repeat the
+no-catchment interchange test. If passengers still transfer and still board
+above, the link is optional, and it becomes a question of art rather than
+function: the honest version is then a **lane that follows the stairs the
+concourse will draw**, added with the art in step 3, or no lane at all.
+
+If they stop transferring, reading 2 is right, the link is load-bearing, and
+anchoring it is a correctness fix rather than a cosmetic one. Either answer is
+worth more than the anchoring work it gates.
+
+For v0.1 as it stands, neither answer blocks anything: the station interchanges
+both ways today, and *that* is what had to be true.
+
 ## Open questions
 
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
@@ -2395,6 +2455,11 @@ later session. Standard and catenary are enough for v0.1.
   content, and `alignToTerrain = false` sounds made for off-grade slots.
 - Does `optional = true` on an alignment entry mean "level if you can" or
   "ignore if it conflicts"? Affects whether level 0 can stay soft.
+- **Is the teleport a fallback for a missing path, or the only mechanism there
+  is?** Open, 2026-10-22, and it decides whether `linkLevels` stays. The control
+  is one deploy: make the link inert and repeat the no-catchment interchange
+  test. See "The interchange works, and our pedestrian link is not what carries
+  it".
 - Does the engine reject construction geometry at z > 0 with no support beneath
   it? The roof at 5.5 m and the main buildings say no, but no stock construction
   puts a *track* up there.

@@ -415,13 +415,22 @@ The work happens in `finish`, not in the module's `updateFn`, and that is
 forced: a module runs in stage 2, and the station records are assembled by the
 two families' hooks in stage 3. The module declares; the script applies.
 
-### Step 2 - anchor the pedestrian link *(next)*
+### Step 2 - anchor the pedestrian link *(blocked on a decision)*
 
 `linkLevels` currently searches for the closest pair of person nodes in plan,
 ignoring z, and in a real session picked a lower endpoint at **z = 5.0** -
 passengers stepping off five metres up. With a concourse present the link should
 start at the concourse's slot instead, which makes it deterministic and puts it
 where the stairs art will be. Keep the vehicle-node refusal.
+
+**First decide whether the link stays at all.** The interchange works in both
+directions and passengers **teleport** between the levels rather than walking
+(2026-10-22), and a stock island platform with no underpass works too - so
+interchange inside a StationGroup does not need a walkable path, and the lane
+may be buying nothing. Against that it is the only known hard-crash path in the
+mod. The control test is T6 step 5: make `linkLevels` inert and repeat the
+no-catchment interchange test. If the link is optional, this step merges into
+step 3 and becomes a lane that follows the stairs art, or no lane at all.
 
 ### Step 3 - the art
 

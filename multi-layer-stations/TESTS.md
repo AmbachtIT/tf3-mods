@@ -283,7 +283,7 @@ The art is a placeholder - two brick walls either side of the road - and is
 meant to look unfinished. Step 3 of Phase 10 replaces it with a tunnel portal.
 
 
-## T5b - can a passenger reach the upper platform? *(new, untested)*
+## T5b - can a passenger reach the upper platform? *(pass 2026-10-22)*
 
 Since 2026-10-12 no station building is seeded on either level - the concourse
 replaces both. The rail main building was also the upper level's authored
@@ -291,16 +291,31 @@ pedestrian connection (`person_lanes` and `linkable_person_lanes`,
 `trainstationutil.lua:436-445`), so that route now runs only through
 `linkLevels` and out via the street entrance.
 
-One check, and it is a behavioural one because nothing about this shows up as an
-error: run a train and a bus line through a station with **nothing but the
-seeded modules**, and confirm passengers actually board on the upper level. A
-platform that is unreachable on foot looks exactly like a platform nobody wants
-to use.
+**Run this as the no-catchment interchange test, which also covers T6 step 3.**
+Build a station with **nothing in its catchment** - open country, no buildings -
+with nothing but the seeded modules, a bus line to a town at one end and a train
+line to a station with its own catchment at the other. An empty catchment
+generates nobody, so every passenger on a platform arrived on one line and is
+leaving on the other, and throughput is the proof. The confound it removes is
+real: a passenger on the elevated platform could otherwise have walked in from a
+house nearby.
 
-If they do not board, place a rail station building by hand. If that fixes it,
-the missing piece is the lanes rather than the catchment, and the concourse has
-to carry a person lane of its own up to the deck - which is Phase 10 step 3's
-job anyway, since that is where the stairs art goes.
+Two things the setup needs, or it will look like a failure that is not one:
+
+- **no alternative route** between the two ends, or the pathfinder will go round
+  the interchange rather than through it, and
+- **both directions watched.** Our link is one lane welded to existing person
+  nodes by coincident position, and `createLane`'s last argument is *linkable*,
+  not *one-way* (`townbuildingutil.lua:207-211` passes `true` for the curve
+  named `entrance_linkable`). A one-way link would pass bus-to-train and fail
+  train-to-bus.
+
+Passed 2026-10-22, both directions. Note what it does **not** prove: passengers
+**teleport** between the levels rather than walking, and a stock island platform
+with no underpass works too, so interchange inside a StationGroup does not need
+a walkable path and this test cannot validate `linkLevels` (root `NOTES.md`,
+"The transfer is instant, and no one walks it"). The follow-up that would is
+T6 step 5.
 
 
 ## T5 - supports
@@ -334,12 +349,16 @@ covered them.
 2. If `skipped N person node(s) that coincide with a vehicle lane node` appears,
    note it - it means the refusal is doing real work and is not just theory.
 3. Confirm a passenger can actually get from a bus at grade onto a train above.
-   Set up a feeder bus line into the lower level and a train line out of the
-   upper one and watch a passenger complete the journey. **Without this the
+   This is the T5b no-catchment test; do not run it twice. **Without it the
    station looks ignored rather than broken**, because a journey is only taken
    when the whole route exists.
 4. If `no pedestrian link possible` appears, the two levels are isolated and
    that is a release blocker, not a limitation.
+5. **Is the link doing anything at all?** Passengers teleport rather than walk
+   (T5b, 2026-10-22), so make `linkLevels` inert - an early return, keeping its
+   diagnostics - and repeat the T5b test. Transfer that still works means the
+   link is optional and the lane is art, not function; transfer that stops means
+   it is load-bearing. One deploy, one run, and it gates Phase 10 step 2.
 
 The thing this test cannot be allowed to produce is the assertion failure in
 `TransportNetworkSystem.cpp:116`. If the game dies on placing or editing the
@@ -413,7 +432,8 @@ Quick, and each one is a thing a player will do in the first hour.
 | T4 upgrade tools *(new)* | **pass 2026-10-22** | steps 1-3 and 5-6 on 10-21: the catenary goes on, an **electric locomotive runs**, and it comes off again; removing it raises the game's own "line is incomplete" notice, which clears when it goes back on - correct behaviour, not a fault. Two earlier failures, same symptom both times: 10-09 `isAffectedByToolFn` would not resolve on the tool thread; 10-12 `upgradeFn` declined on a gate reading `entry.metadata`. Step 4 closed 10-22: dragging track from the Tracks menu **collides, as it should** - that is the builder, not an upgrade path. The two real routes both work, the upgrade tool and replacing the module. Separately parked: the upgrade tool lists no high-speed variant. Round seventeen |
 | T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
 | T5 supports | **place and delete pass 2026-10-22** | seven solid blocks, filling their cells, lining up with each other. A support **deletes** with neighbours either side and its cell filled to within 0.1 m, which retires round three: the collider overhang was never what the bulldozer objected to, and there is no allowance left to reinstate. One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
-| T6 pedestrian link *(new)* | partial 2026-10-21 | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 - a passenger actually completing bus-to-train - is untested |
+| T5b passengers reach the upper platform *(new)* | **pass 2026-10-22** | run as the no-catchment interchange test: empty catchment, bus one end, train the other, so throughput is the proof. Transfers **both ways**. They **teleport** rather than walk, which a stock island platform with no underpass does too - so this says the station works and says nothing about `linkLevels` |
+| T6 pedestrian link *(new)* | **steps 1-4 pass 2026-10-22**, step 5 open | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 passed as the T5b interchange test, in both directions, so the levels are not isolated and the blocker is closed. Step 5 - whether the link is what carries it - is the open one, and the teleport says probably not |
 | T7 save / reload / rebuild | | |
 | T8 mod removal | | |
 | T9 awkward cases | | |

@@ -825,6 +825,31 @@ choices:
   **no `break`**. So every station in the group shows the same label, and which
   one depends on carrier order, not on which station was clicked.
 
+### The transfer is instant, and no one walks it
+
+**Measured 2026-10-22**, on a station deliberately built with **nothing in its
+catchment** - so the station generates no passengers of its own and anyone
+standing on a platform arrived on one line and left on the other. Passengers
+transfer in both directions, train to bus and bus to train, 12 m apart
+vertically. They do not walk between the levels: they **teleport**.
+
+The corroboration is in stock behaviour, and it is the reason to write this
+down as engine behaviour rather than as a quirk of one mod: a stock station with
+an island platform and **no passenger underpass** also works. The game does not
+strand passengers on a platform they have no authored path to.
+
+So within a StationGroup, a walkable `PERSON` path between two platforms is
+**not** what makes interchange work, and observing a successful transfer proves
+nothing about whether a path exists. For a mod that builds one deliberately -
+`multi-layer-stations` links its two levels with a lane of its own - that
+matters twice over: the lane cannot be validated by watching passengers use it,
+and it may not be load-bearing at all. Which is worth knowing before paying for
+one, since a hand-built `PERSON` lane is also the one thing that can hard-crash
+the game (see "A PERSON lane must never share a node with a vehicle lane").
+
+What is **not** settled is whether the teleport is a fallback for a missing path
+or the only mechanism there is. Nothing here distinguishes them.
+
 
 ## Two subconstructions must not share a `tag`
 
