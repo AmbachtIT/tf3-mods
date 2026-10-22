@@ -4,6 +4,7 @@
         "multi_layer_station.con.lua",
         "multi_layer_station.script.lua",
         "ml_support.module.lua",
-        "ml_concourse.module.lua"
+        "ml_concourse.module.lua",
+        "support_block.mdl"
     ]
 }

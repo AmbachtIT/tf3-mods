@@ -577,6 +577,55 @@ Two rules follow:
   space has nothing to collide with. Snapping to an existing road is the test.
 
 
+## Neither `boundingInfo` nor the collider is the geometry - read the mesh
+
+**Measured 2026-10-13**, after three rounds of `multi-layer-stations` making
+placeholder art out of a piece that does not have the shape its `.mdl` implies.
+
+A `.mdl`'s `boundingInfo` is a bound, not an outline, and its `collider` is a
+separate box again. The geometry itself is in the `.msh` beside it, which is a
+**Lua header** describing byte offsets into a `.msh.blob`, and both are readable
+offline. `tools/meshfaces.py` does it:
+
+```
+python tools/meshfaces.py pillar wall      # or no argument for everything
+```
+
+The header's `vertexAttr.position` is float32 xyz and `indices.position` is
+uint32 triangle corners. Both `count` and `offset` are in **bytes** - reading
+them as element counts gives 32 vertices where there are 8, and the extra
+"vertices" are the uv and normal arrays read as positions, which look plausible
+and are not.
+
+What that turned up for the piece this project had been scaling into cells:
+
+| model | `boundingInfo` | collider | mesh | faces | triangles |
+| --- | --- | --- | --- | --- | --- |
+| `bridge/stone/stone_abut_rep_rep.mdl` | 4.43 x 4 x 2 | 3.43 x 4 x 2 | 3.43 x 4 x 2 | **2** | **4** |
+
+Two faces, four triangles: a **pair of parallel planes**, which is all a bridge
+needs of an abutment piece since the rest is buried. Scaled to fill a cell it
+gives a correct envelope made of flat faces, and no amount of tiling or filling
+changes that. The lesson generalises: **a `_rep_` piece from a bridge or track
+family is a facing, not a block**, and the only way to know what one draws is to
+read it.
+
+Two practical consequences:
+
+  * **For placeholder art, prefer a closed box whose collider equals its mesh.**
+    Then one scaled instance fills any volume and there is no overhang to
+    compensate for. The base game has no neutral one - `placeholders/unit_cube.mdl`
+    is a proper closed cube but declares a collider three times its mesh - so
+    `multi-layer-stations` ships a four-line `.mdl` that reuses that cube's mesh
+    with a collider of its own. Stock models reference meshes and materials by
+    absolute path freely (695 and 8354 times respectively), so nothing has to be
+    copied.
+  * **A collider that is not where the mesh is matters.** `bridge/stone/pillar_top_rep.mdl`
+    is a closed box with its collider 6.5 m above its geometry; a module drawn
+    with it would look right and be in the wrong place for anything that picks
+    by collider.
+
+
 ## A model's collider is not its mesh, and it is the collider that collides
 
 **Measured 2026-10-12.** Every `.mdl` may declare a `collider`, and it is a
@@ -674,6 +723,51 @@ leaves something to click. `spacing` is `{left, right, back, front}` from the
 slot origin, so any asymmetric axis-aligned rectangle *containing the origin*
 can be written back exactly; one that does not contain the origin cannot, and
 will silently inflate back over the obstacle.
+
+**But the reservation has to hold ground that nothing else is holding.**
+Measured in `multi-layer-stations` across three game sessions on 2026-10-13. A
+slot with a full 24 x 6 m reservation, sitting on the ground of an **occupied**
+stock slot, is not offered - and the fact that matters took three rounds to
+ask for: **it has no pip at all**. Not a pip that is hard to hit, not a click
+that is refused - the slot is not in the candidate set for its module, so
+nothing about cursors, rays, geometry or `dependentSlots` can explain it. Those
+all happen later. In the same sessions, an identical slot 30 m away on open
+ground was offered every time and took 23 modules, and the one support cell of
+a tiled row that stood on the bus platform's ground was never offered while its
+neighbours were.
+
+So the rule to design against, with "no reservation" as one end of it rather
+than a separate fact:
+
+> an empty slot is offered where its reservation holds ground that no
+> **occupied** slot is holding. Reserving nothing fails that; reserving ground
+> that is entirely inside an occupied slot's rectangle fails it too.
+
+**Confirmed by putting both shapes in one build**, at the same street entrance,
+in the same session: a slot reserving a 2 m x 6 m band of clear ground took four
+modules, and a slot at the same place reserving nothing but listed in
+`dependentSlots` of the occupied entrance - which is exactly stock's platform
+roof configuration - was never offered at all. Every other combination had
+already failed: the full rectangle overlapping the entrance, with and without a
+dependency, and the same rectangle with its origin moved onto clear ground while
+the rectangle still overlapped.
+
+Three corollaries, all measured:
+
+  * **`dependentSlots` does not let an excluded slot in.** Whatever it does for
+    stock's zero-reservation roof slots, it is not a substitute for ground, and
+    in a mod it is worth keeping only for what it certainly does do: take a
+    dependent slot's module with its parent instead of orphaning it.
+  * **The reservation and the module's footprint are separate things, and the
+    reservation is the one that has to fit.** A slot can reserve a 2 m band and
+    draw a 24 m structure: `addModel` works in the slot's frame, so the models
+    take an offset (`cx`) and the art lands where it belongs. Anything that
+    reads a position back off the slot - a catchment circle, a label - needs the
+    same offset, through the slot's own transform so rotation survives.
+  * **A missing pip and a missed click are different diagnoses.** Ask which one
+    you have before theorising: "no pip" means the slot was filtered out of the
+    candidate set, so only the slot's own declaration can be at fault, and
+    nothing about cursors, geometry or colliders is relevant yet.
 
 
 ## A track module has no geometry to click - its slot rectangle is all there is
@@ -939,9 +1033,16 @@ locking up rather than as an error. So the check covers both shapes:
 
 - calls to a name that is not a local in the file;
 - SCREAMING_CASE names *read as values* that are not a local - a nil constant
-  travels silently into a table and fails somewhere else entirely.
+  travels silently into a table and fails somewhere else entirely;
+- either of those used **above** the `local` that declares it. Added
+  2026-10-13, after a constant was moved 75 lines below the function that reads
+  it: a Lua local is only an upvalue for code after it, so the function read a
+  nil global, and "is it a local in this file" answered yes. The check now
+  records the line each name is declared on, and every definition has to come
+  before its first use. It cost a deploy-and-restart to find the one time it was
+  missing.
 
-Both were verified by deleting a real definition and confirming the warning
+All three were verified by breaking a real definition and confirming the warning
 fires. A lowercase bare name is deliberately not checked, since it has too many
 legitimate reasons to be a global.
 
@@ -1010,6 +1111,27 @@ compute the overlaps in the script and log them.
 
 The message is **not** in `locale/en.lang.lua`, and nor are the other engine
 tooltips - do not conclude from a miss there that a string is not the engine's.
+
+
+### The slot fields the engine reads
+
+From the registration strings, in the order they sit in the binary (build
+40408). Worth having in full, because three of them appear nowhere in this
+project and two of them appear nowhere in the stock Lua either:
+
+| struct | fields |
+| --- | --- |
+| `ConstructionSlot` | `id`, `transf`, `type`, `spacing`, `autoFill`, `replaceable` |
+| `ConstructionSlotConfig` | `skipCollisionCheck`, `maxModules`, `message` |
+| `Construction` component | ... `subconstructions`, `dependentSlots`, `slotConfig`, `tag2modelInstance`, `tag2segments`, `persistentMetadata` ... |
+
+`dependentSlots` being a field of the **component** rather than of the
+`updateFn` result is the part that matters: the engine reads it and the savegame
+keeps it. Stock sets `maxModules = -1` on every street slot type and `-8-2` on a
+harbor one, so a negative value is not a disabled flag; `message` is `""`
+everywhere except `street_terminal_exit`, which carries "You shall not pass";
+and `modules_util::GetNumAndFilledAutoFillSlots` with `autoFillSlots` on
+`SimpleProposal` says `autoFill` is about slots the engine fills by itself.
 
 
 ## A deployed mod still has to be activated per savegame

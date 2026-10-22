@@ -100,3 +100,48 @@ the slot being acted on.
 
 Does not, yet: any choice of transport type per level, road-over-rail as well as
 rail-over-road, cargo, or anything below grade.
+
+
+## Where the default station puts things
+
+The seeded deck lands **on the concourse**: the quarter turn puts the rail
+columns at a 5 m pitch along the construction's y axis, and `RAIL_SHIFT_Y`
+moves them so the platform sits at the entrance's edge rather than three columns
+short of it. The bus platforms are then beside the deck, with three free column
+positions to extend into if you want tracks over them.
+
+A station places with one platform and one track above, one bus platform and an
+entrance below, and **one concourse** over the entrance - which is what gives
+either level a catchment of its own. No station building is seeded on either
+level; the concourse stands in for both.
+
+
+## Accepted limitations
+
+Measured, understood, and left as they are for v0.1:
+
+- **The elevated deck stops at the street entrance, and does not continue on
+  the far side of it.** No platform or track slot is offered over the entrance's
+  own 16 x 15 m tile, because a module there could never be removed again: the
+  entrance spans the full width of a track column's reserved rectangle, so
+  nothing would be left of it to click. Since the entrance is narrower than a
+  40 m tile is long, the tiles either side of that one *could* be built on and
+  the deck could hop the road - so everything at or past the first blocked
+  column is withheld too, on that side only. About 15 m of the station's
+  frontage is out of reach, and the concourse is what crosses the road there
+  instead.
+- **A concourse is placed by clicking a 2 m band at one of its piers**, not
+  anywhere on its 24 m span. The engine offers an empty slot only where its
+  reservation holds ground no occupied slot is holding, and the entrance's own
+  reservations cover everything inside x = +-10 of our cell. The art and the
+  catchment are offset back over the entrance, so only the pip sits off-centre.
+- **A support cell that stands inside the bus platform's own rectangle is never
+  offered.** One cell, hidden under the platform, for the same reason. The build
+  logs the count on every rebuild.
+- **The supports and the concourse are placeholder blocks**, drawn with
+  `support_block.mdl` - a solid 1 m stone cube shipped with the mod, reusing the
+  game's own unit-cube mesh with a collider equal to it. They are deliberately
+  solid and fill their cell to within 0.1 m on every side, because what is drawn
+  is how a modder reads the room the real art has. The concourse is the one
+  exception: its footprint is open below the deck, since the 16 m entrance road
+  runs through it.

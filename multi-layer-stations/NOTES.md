@@ -985,6 +985,11 @@ and when that lands the twin can go.
 
 ## Round three: what collides is the collider, 0.8 m into the next cell
 
+> **Retired by "Round seventeen".** The measurements below are right about the
+> old piece and wrong about the bulldozer: a support now deletes with its cell
+> filled to 0.1 m. Kept for the collider arithmetic, which is still how a model
+> is read.
+
 **2026-10-12.** The symptom was "the supports are a bit wider than necessary -
 maybe that is why I still cannot delete them", and that guess was right, for a
 reason nothing on screen shows.
@@ -1191,6 +1196,11 @@ whether the refusal goes with them.
 
 
 ## Round six: the concourse is the offender, and the log proves it is not the supports
+
+> **Closed by "Round seventeen".** True of that build, not a rule: a platform
+> now deletes with the concourse seeded and in the build. What made the
+> configuration invalid was the reservations the concourse carried, which round
+> seven clipped.
 
 **2026-10-12, 15:52 session.** Two facts from the same log kill three rounds of
 theory:
@@ -1404,7 +1414,949 @@ local. It went unnoticed because the known cases were hard-listed in
 `GAME_GLOBALS` with a comment saying `PARAMS_RE` was meant to cover them.
 Repaired, and both mods check clean.
 
+## Round nine: a slot standing on occupied ground cannot be clicked
+
+**Measured 2026-10-13.** *"I can place the concourse next to the bus station
+entrance, but not over the bus station entrance itself."* Two concourse slots
+were in the build, identical in every way that a slot can be - the same cell,
+the same `spacing`, the same type with the same `skipCollisionCheck`, the same
+`replaceable`, consecutive ids, the same module - and differing only in **where
+they are**: the real one on the entrance, the probe 30 m along the entrance's
+own x, out in the open. The log settles it in two lines:
+
+```
+concourse slots 24x6: 820015500@(0.0,-18.0) occupied=false, 820015501@(30.0,-18.0) occupied=true
+module add slot=820015501 family=ours via=plain modules=11->12 name=multi_layer_stations_1::/ml_concourse.module
+```
+
+Four adds on the probe, forty-one removes, and **not one** on the real slot in
+the same session. So nothing about the slot, the module, its desc or its id was
+ever the problem. The engine resolves a cursor position to a single slot, and
+where an occupied slot already claims that ground at that height, it wins; ours
+is then unreachable however well formed it is. `logBuriedSlots` names the pair
+on every rebuild:
+
+```
+our slots with an occupied stock slot over the same ground: 2 of 42;
+  674000001 ml_support at (15.6,-0.0) under 20010000 street_terminal_passenger;
+  820015500 ml_concourse at (0.0,-18.0) under 20015503 street_terminal_entrance_exit
+```
+
+This is the other half of round eight. An empty slot has only its rectangle to
+be found by - and a rectangle is not enough if something occupied is standing on
+it.
+
+### The entrance's own rectangle is wider than the concourse
+
+All three entrance variants are emitted at **one** transform
+(`modular_terminal.script.lua:2596-2617`), and the `large_building` slot at that
+same transform is wider still:
+
+| slot at the entrance transform | `spacing` | reaches |
+| --- | --- | --- |
+| `street_terminal_entrance_exit` | `{8, 8, 15, 0}` | x -8 .. 8, y -15 .. 0 |
+| `street_terminal_entrance` | `{3, 8, 15, 0}` | x -3 .. 8 |
+| `street_terminal_exit` | `{8, 3, 15, 0}` | x -8 .. 3 |
+| `street_terminal_large_buildings` | `{10, 10, 20, 0}` | x -10 .. 10, y -20 .. 0 |
+
+The union reaches x = +-10 and 15 m back along y, while the concourse cell is
+24 m x 6 m centred on the same point - so every part of it within x +-10 is
+claimed, and the only clear ground it has is the two bands x = 10 .. 12 and
+-12 .. -10, out at its piers. Moving the cell off the entrance is not an option:
+spanning that road is what a concourse *is*.
+
+### So move the origin, not the cell
+
+`spacing` is four distances from the slot's **origin**, not a half-extent, so
+the origin does not have to be in the middle of its own cell.
+`CONCOURSE_PICK_X = 11` puts it out on the flank, in the middle of the clear
+band, and `concourseSpacing` gives back `{23, 1, 3, 3}` - the same 24 x 6 m
+rectangle, in the same place, measured from somewhere else.
+
+Two things follow from that and both are in the code:
+
+- `addModel` draws a module's models relative to the slot's origin, so the art
+  has to come back the other way. `concourseModels` takes the cell centre as
+  `cx` and is called with `-CONCOURSE_PICK_X` from both the `updateFn` and the
+  preview's `getModelsFn`.
+- the catchment circle is positioned from the slot, which is now 11 m off the
+  entrance it serves. `applyConcourse` corrects it through the slot's own
+  frame, so a rotated entrance stays right.
+
+A side effect worth having: an **occupied** concourse used to be zeroed by
+`trimReservations`, because no single cut clear of the entrance left a rectangle
+containing the old centre origin. From the flank, the cut to x = 8 keeps it, so
+the placed concourse keeps a 4 m strip to be picked by instead of nothing.
+
+The probe stays for one more round, as the control that says whether a build
+reached the game at all - and because it is holding a module in the test save.
+
+**The fix in this section does not work, and the measurement in it still
+stands.** Moving the origin to the flank changed nothing in the game; see round
+ten, which keeps the finding and throws the offset away.
+
+## Round ten: a click resolves to what is standing there, not to a rectangle
+
+**Measured 2026-10-13, same day, second run.** The pick origin was out on the
+flank - the pip had visibly moved in the game, and the diagnostic agreed
+(`our slots with an occupied stock slot over the same ground: 1 of 42`, the
+concourse no longer among them). The slot was **still** never offered. In 2915
+lines of log:
+
+- 14 `module add slot=820015501` lines on the probe, 18 removes;
+- not one `module add slot=820015500` on the real slot;
+- no `Invalid configuration`, no `construction not possible`, nothing from the
+  engine at all.
+
+That last point is what makes this a resolution failure and not a refusal.
+`preProcessFn` logs **every** proposed change, and a refusal is a proposal that
+does not commit - we have seen plenty of those. Here nothing was ever proposed.
+
+So round nine's measurement holds and its reading was half wrong. Position
+decides, but a reserved rectangle is not how a click finds a slot: there was
+ground inside our cell that no stock slot reserved, the origin was moved onto
+it, and it made no difference. What the cursor lands on over the entrance is
+the entrance **module** - its geometry, its pavement - and that is what the
+click resolves to. An empty slot's rectangle only works where nothing is
+standing, which is exactly the probe's situation and exactly not ours.
+
+### Stock has an idiom for this, and it is the half round eight left out
+
+Round eight read the rail station's roof and addon slots and took one half of
+what they do: a slot stacked on an occupied one. The other half is one line:
+
+```lua
+result.dependentSlots[platformSlotId] = { roofSlotId, addonSlotId }
+```
+
+(`modular_station.script.lua:567-612`). Those two slots have
+`spacing = {0, 0, 0, 0}`, so by round eight's own finding they cannot be
+clicked - and roofs are placeable in the stock game. The platform's click is
+the route, and `dependentSlots` is what names it.
+
+The exe backs that up. Strings in `TransportFever3.exe`, build 40408:
+
+| string | what it says |
+| --- | --- |
+| `ConstructionSlot` + `replaceable`, `autoFill`, `spacing` | the slot fields the engine reads from Lua - and `autoFill` is one we do not use |
+| `ConstructionSlotConfig` + `skipCollisionCheck`, `maxModules` | `slotConfig`, which stock also gives a `message` and `maxModules = -1` |
+| `dependentSlots`, next to `tag2modelInstance` and `subconstructions` | **a field of the `Construction` component**, not a Lua convention: the engine reads it and the savegame keeps it |
+| `UI::ModuleBuilder::MousePressed`, `::RecheckCollisions`, `modules_util::Collision` | the click path and the collision path are different code, which is why a collision message never appeared |
+
+`tag2modelInstance` sitting beside it is the shape of the mechanism: modules
+are drawn with a tag, the tag maps back to the module, and a click on a model
+instance is a click on the slot that drew it. Empty slots have no instance, so
+they fall back to their rectangle - and lose wherever a filled slot's geometry
+is in the way.
+
+### `dependSlot`, used twice
+
+- **The concourse, keyed on its entrance.** Declared from intent, not geometry:
+  the concourse slot is derived from that entrance slot, so that is its parent,
+  per occupied entrance variant.
+- **Anything of ours standing on occupied stock ground**, keyed on the slot it
+  stands in. `logBuriedSlots` became `dependOnOccupiedGround`: the diagnostic
+  that was written to report the problem now routes what it finds, which is how
+  the buried support gets a way in without hard-coding anything about bus
+  platforms.
+
+The origin offset came out again, so the concourse cell is centred on its
+entrance and the art and the pip agree. A new log line prints the
+`dependentSlots` table as the engine will get it, ours named - because
+`shareLists` hands the merged result **rail's own** table, and a write that
+landed in a copy instead would look exactly like the dependency not being the
+mechanism.
+
+### The support confirms the rule, a second time
+
+Round nine predicted that the one support standing on the bus platform's ground
+could not be placed while its neighbours could. The log says yes, without
+anyone having to aim at it:
+
+```
+module add slot=673999902 / 673999903 / 673999905 / 674000003 / 674000005 ...
+```
+
+- and never `674000001`, the buried one, which is `k = 1` of the same tiled row
+as `674000003` and `674000005`. Two families, two positions, one rule.
+
+### It did not work either, and the log says the dependency was not the reason
+
+The entries reached the engine - that is what the new log line was for:
+
+```
+dependent slots: 6 parent(s), 2 of them pointing at a slot of ours;
+  20015503 -> 820015500, 20010000 -> 674000001
+```
+
+Six parents, so rail's own platform pairs are in there too and the table is the
+one the engine gets. And still: no `module add slot=820015500`, no
+`module add slot=674000001`, in a session where five other support cells and
+the probe took modules. So `dependentSlots` is not a way *in* to a slot that is
+otherwise excluded - whatever it does for stock's roofs, it does not do it here.
+See round eleven, which has the measurement that explains why none of this could
+have worked.
+
+## Round eleven: there is no pip, so the slot is excluded before any click
+
+**2026-10-13, third run, and this is the measurement that should have come
+first.** *"I still only see a single blue slot pip and it is to the side of the
+entrance road."*
+
+One pip, 30 m along the station front: the probe. The slot on the entrance has
+**no pip at all** - and re-reading round nine, it never had one. What moved
+there was the probe's pip, which the offset shifted by the same 11 m, and the
+report of "the pip was translated" was taken as evidence about the real slot.
+It was not. Three rounds of aiming at a pip that was never drawn.
+
+A missing pip is a different fact from a click that misses. It means the engine
+does not have the slot in its candidate set for that module at all, so nothing
+about cursors, geometry, rays, `tag2modelInstance` or `dependentSlots` can be
+the explanation - all of those happen after a slot is a candidate. The filter
+runs earlier.
+
+### What the excluded slots have in common
+
+Two slots of ours have now never taken a module, in three sessions, across two
+families:
+
+| slot | where | reserves | pip |
+| --- | --- | --- | --- |
+| `820015500` concourse | on the street entrance | 24 x 6 m, overlapping the entrance's `{8,8,15,0}` | none |
+| `674000001` support | under the bus platform | 5 x 7.8 m, overlapping `street_terminal_passenger` | none seen |
+| `820015501` probe | 30 m out in the open | 24 x 6 m, overlapping nothing | yes, and 23 modules placed in it |
+| 40 other supports | clear of the bus station | 5 x 7.8 m, overlapping nothing | yes, placeable |
+
+The common property is not height, not type, not id, not `slotConfig`, not the
+module - all of those are shared with slots that work. It is that **the
+reservation overlaps an occupied stock slot's reservation**. Every slot of ours
+whose rectangle is clear works; both whose rectangle is not are excluded.
+
+That also re-reads round eight correctly. Its conclusion was "an empty slot with
+no reserved ground is not offered at all", measured by zeroing every slot - and
+that is still true, but it is one end of a single rule, not a separate fact:
+
+> the engine offers an empty slot where its reservation holds ground that no
+> occupied slot is holding. No reservation is one way to fail that; a
+> reservation entirely inside somebody else's is another.
+
+### The two readings, and both are in the build
+
+What is **not** settled is whether the overlap disqualifies the slot outright or
+whether stock simply never does this - its stacked slots reserve nothing and are
+listed in `dependentSlots`, and ours reserved ground *and* overlapped. So one
+slot each:
+
+| slot | shape | what its success would mean |
+| --- | --- | --- |
+| `820015500`, the real one | `spacing = {0,0,0,0}` + `dependentSlots[entrance]` | stock's idiom is the answer, both halves, and the entrance is the thing to click |
+| `820015501`, the probe, moved onto the entrance's flank | a 2 m x 6 m band at x = 10 .. 12, overlapping no stock reservation, no dependency | the reservation is a filter, and a clear rectangle is all it ever needed |
+
+The two cannot interfere, because the real slot now claims no ground for the
+probe's band to compete with, and the `concourse slots` log line prints each
+slot's reservation next to its position so the shapes are readable from the log
+alone.
+
+Worth noting what the zero also buys, whichever way the experiment falls: it is
+what round four wanted. The flat module-collision check is over reservations, so
+a concourse that reserves nothing cannot be half of a colliding pair, and
+`trimReservations` has nothing to clip for it - the `occupied()` guard already
+skips a zero.
+
+## Round twelve: answered. A slot needs a reservation on ground nobody occupies
+
+**2026-10-13, fourth session, and this is the rule.** Both shapes were offered
+side by side at the same entrance, and the log is one line:
+
+```
+concourse slots 24x6: 820015500@(0.0,-18.0) reserves 0x0 occupied=false,
+                      820015501@(11.0,-18.0) reserves 2x6 occupied=true
+module add slot=820015501   (x4)
+```
+
+The 2 m band took the module. The zero reservation with a `dependentSlots` entry
+under its entrance - stock's own idiom for a stacked slot - was never offered at
+all. So:
+
+> **The engine offers an empty slot only where its reservation holds ground
+> that no occupied slot is holding.** Nothing else substitutes for that: not
+> `skipCollisionCheck`, not `replaceable`, not moving the origin onto clear
+> ground while the rectangle still overlaps, not being listed in
+> `dependentSlots` of the slot that is standing there.
+
+Four sessions of evidence, every combination tried once:
+
+| reservation | origin | dependency | offered |
+| --- | --- | --- | --- |
+| 24 x 6 m, overlapping the entrance | centred | no | **no pip** |
+| 24 x 6 m, overlapping the entrance | on clear ground, x = 11 | no | **no pip** |
+| 24 x 6 m, overlapping the entrance | centred | yes | **no pip** |
+| none | centred | yes | **no pip** |
+| 2 x 6 m on clear ground, x = 10 .. 12 | x = 11 | no | **yes - 4 modules** |
+
+That also puts round eight's finding in its place. "An empty slot with no
+reserved ground is not offered" is not a separate fact about zero; it is the
+degenerate case of this rule, and the whole of rounds nine to eleven was spent
+looking for a way round a rule that does not have one.
+
+### What the mod does now
+
+One concourse slot per entrance, at `CONCOURSE_FLANK` = 11 m along the
+entrance's local x, reserving the 2 m x 6 m band from x = 10 to 12 - inside our
+own cell, and clear of every rectangle stock puts at that transform: the three
+entrance variants at x = +-8 and `large_building` at +-10.
+
+Two compensations come with that, and neither is cosmetic:
+
+- `concourseModels` is handed `cx = -CONCOURSE_FLANK`, so the piers still
+  straddle the road 11 m away from the slot's origin. The probe showed what the
+  alternative looks like: *"the mesh is not positioned over the entrance road,
+  but one side of it collides with it"* - a pier in the carriageway;
+- `applyConcourse` reads the catchment position back through the slot's own
+  frame, so the circle sits over the entrance and not out at the pier. Through
+  the frame rather than in world x, so a rotated entrance comes out right.
+
+The probe is gone - four sessions, and the question it was built for is
+answered. The `dependentSlots` entry stays, demoted to what it is: the removal
+cascade, so a concourse goes with its entrance rather than being orphaned and
+dropped with a warning.
+
+### The price, and the one slot still unreachable
+
+A 2 m x 6 m target at one pier instead of the 24 m span, with the pip there
+rather than in the middle of the concourse. That is the rule's price and there
+is no way to pay less of it at this position - every other part of our cell is
+inside the entrance's own rectangle.
+
+The one support cell standing in the bus platform (`674000001` at (15.6, 0))
+cannot be fixed the same way: its cell is in the **middle** of the platform's
+rectangle, not at its edge, so there is no clear band to retreat to. Two honest
+options, neither taken yet:
+
+1. stop offering it - do not create a support slot whose reservation is inside
+   an occupied stock slot's. Cheap and truthful, and it removes a pip that
+   never worked. The risk is the reverse case: a player who removes the bus
+   platform, places a support there, and puts the platform back would have the
+   slot vanish under a module that is already in it;
+2. leave it. It is a support **under a bus platform** - invisible, and
+   structurally pointless, since the platform is not what the deck rests on.
+
+Option 2 is what the build does, and `dependOnOccupiedGround` reports the count
+on every rebuild so it cannot quietly grow.
+
+## Round thirteen: the same rule, from the other side, in stock's slots
+
+**Reported 2026-10-13, with the concourse finally working.** *"I can place
+platforms and tracks over the bus station. If I extend them too far so the
+track is above the concourse mesh, I can't delete the track, even if I have
+deleted the concourse. When hovering over the track with the module delete
+tool, the track doesn't light up in yellow."*
+
+No highlight is the same symptom as no pip, and it has the same cause - only
+this time it is a **stock** slot that has no rectangle, and we are the ones who
+took it away. The log of that session:
+
+```
+cross: 8395000 rail/track (-0.0,-25.0,12.0) 5.0x39.0
+    vs 20015503 street/street_terminal_entrance_exit (0.0,-22.5,0.0) 16.0x15.0 dz=12.0
+trimmed the reserved ground: ... 2 zeroed because no single cut would do
+```
+
+The entrance reserves 16 x 15 m; a track column is 5 m wide and 39 m long. So
+the entrance spans the **entire width** of the track's rectangle - no cut in x
+leaves anything - and a cut in y would have to drop the slot's own origin at
+y = -25, which is inside the entrance's -30 .. -15. `spacing` is four distances
+from the origin, so a rectangle that does not contain the origin cannot be
+written back at all: `trimReservations` zeroes the slot, and a track module has
+nothing else to be found by, because it draws one invisible model with no
+collider (root NOTES.md).
+
+**The concourse was never involved**, which is exactly why deleting it did not
+help. The obstacle is the street entrance's own reservation, and the concourse
+merely stands on the same ground.
+
+### The fix is round twelve's rule applied to stock's slots
+
+A slot that cannot hold a rectangle must not be offered.
+`dropUnreservableRailSlots` asks the clip question *before* a module is in the
+slot - the test is factored out of `trimReservations` as `clipAgainstAll` so the
+two cannot disagree - and takes the **empty** ones out of `result.slots` before
+the engine sees them. The deck now stops one tile short of the entrance rather
+than extending into a tile whose module could never be removed again, and the
+count is logged every rebuild:
+
+```
+rail slots not offered, because no reservation of theirs would survive the
+level below: N. A module there could never be removed again.
+```
+
+**Empty only, on purpose.** Dropping an occupied slot orphans its module, and
+an orphan is one of the few configurations the engine can call invalid outright
+- which would turn "one module I cannot delete" into "a construction I cannot
+edit". The guard is about not getting there; it cannot clean up after the fact.
+
+### Recovering a module that is already stuck
+
+Without bulldozing the station: **remove the street entrance module.** That is
+the obstacle, it is removable (`module remove slot=20015503 family=street`
+appears throughout the logs), and with it gone nothing fouls the track column -
+`trimReservations` leaves it its full 39 m, the track highlights, and it can be
+deleted. Then place the entrance again. The concourse slot comes back with it.
+
+### What it costs, and the one way out of that
+
+The deck cannot be extended over the entrance strip at all - not even as a
+platform, because platform and track share a transform and a rectangle, so both
+go. Fifteen metres of the station's own frontage is out of reach, and the
+concourse is what crosses the road there instead. For this mod that is close to
+the intended shape anyway, so it is a cheap price.
+
+The one thing that would lift it is **negative `spacing`**, which has never been
+tried: if the engine reads `{left, right, back, front}` as plain offsets rather
+than as distances, then `{19.5, -5, 2.5, 2.5}` describes the part of the track
+column *south* of the entrance - a rectangle that does not contain the slot's
+origin, which is the one shape the clip cannot express today. Untested, and the
+notes' claim that such a rectangle "cannot be written back" is an assumption
+about sign, not a measurement.
+
+## Round fourteen: the placeholders fill their cells, and what the inset was for
+
+**2026-10-13, on request:** *"Can you please modify the meshes so they fully
+occupy the space they use? They are placeholder content, so showing their full
+extent is useful for modders."*
+
+A 5 m platform cell was drawing 3.0 m of brickwork - 61% of it - and the missing
+2 m was two insets stacked on each other:
+
+| inset | what it bought |
+| --- | --- |
+| `SUPPORT_MARGIN`, 0.5 m a side | half a metre of clear ground, measured against the collider envelope |
+| the collider allowance in `fitSpan` | the brick's own overhang, `0.158 x tile`, which is 0.70 m at a full tile |
+
+The margin went. It was round three's answer to "a support can be placed and not
+removed", and rounds four to six removed nothing while it was in place; round
+seven fixed removal by clipping the **reservations**. So it was buying off a
+cause that was never demonstrated, at 1 m of every cell.
+
+The allowance stayed, because *that* is measured - `stone_abut_rep_rep.mdl`'s
+collider really does reach 0.70 m past its mesh at a full tile - and because the
+drawn-vs-cell figure in the log is only worth having if the geometry is supposed
+to stay inside the cell. Instead the **tile** got shorter, which is the lever
+that was there all along: the overhang is a fraction of the tile, so the same
+span laid in three pieces gives away a third as much.
+
+```
+cap        5.0 m cell   7.8 m cell   24 m cell
+4.43 m     73%          84%          94%     (the brick's own length)
+2.00 m     87%          90%          97%     (SUPPORT_TILE)
+```
+
+Flush was tried on paper first and rejected on the arithmetic: a mesh on the
+cell outline puts 0.28 m of collider into the neighbour on a 5 m cell and 0.36 m
+past the concourse's own kerb-facing edge - and that second one is the exact
+failure the concourse was refused for once already. 87% with the envelope inside
+the cell is worth more than 96% with it outside.
+
+The concourse also got the thing that actually shows its extent: **a deck slab
+across the whole footprint** at the top of the structure (`CONCOURSE_DECK`),
+with the piers carrying it. Filling the footprint at *grade* was never an option
+- the 16 m entrance road runs through the middle of this cell - and a slab at
+the top is what a concourse is anyway. `brickWall` takes a `z0 .. z1` band for
+it, scaling the courses to land exactly on the top rather than overshooting it.
+
+What the cells draw now, envelope included, against the cell they have to fit
+in:
+
+| cell | mesh | envelope | cell |
+| --- | --- | --- | --- |
+| support, platform span | 4.34 x 7.60 | 4.80 x 7.60 | 5.0 x 7.8 |
+| concourse | 23.19 x 5.25 piers + slab | 23.80 x 5.80 | 24 x 6 |
+
+### And then: filling the cell is not the same as being solid
+
+Second report, same day: *"The meshes look slightly better, but they still
+don't look like a fully fleshed out mesh. I see parallel faces that suggest the
+total shape of the envelope, not a full solid shape."*
+
+Which is the hollow box seen from outside. A support was four 1 m walls on the
+cell outline, so what a modder reads off it is two wall faces with a void
+between them - and from that you cannot tell whether the real art has 1 m to
+work in or 5. Widening the walls' *outline* to 87% of the cell did nothing
+about that, because the outline was never the problem.
+
+So the volume is filled. `brickFill` is `brickWall` repeated across the depth,
+and the two aesthetic arguments that produced the hollow box - "12 m of masonry
+reads as a block rather than a support" and "the inside of a closed box cannot
+be seen" - are arguments about a stand-in, which is exactly what should lose to
+being readable.
+
+One wall already fills its own thickness, because the piece is *scaled* to it:
+a wall 7.6 m thick is 7.6 m of masonry, not two faces. What it is not is in
+proportion - stretched five times its own depth the brick smears - so the depth
+is laid in `SUPPORT_TILE` slices, each a wall in its own right. Nothing is added
+to the envelope by that: a wall's collider overhangs the direction it **runs**,
+not its thickness, so slicing the depth is free and only `x` pays the
+allowance, once.
+
+| | mesh | collider reach | half-cell | models |
+| --- | --- | --- | --- | --- |
+| support, platform span 5.0 x 7.8 | 4.34 x 7.60 solid | 2.40 | 2.50 | 144 |
+| support, building span 15.0 x 7.8 | 14.24 x 7.60 solid | 7.40 | 7.50 | 384 |
+| concourse deck 24 x 6 | 23.19 x 5.25 x 6 solid | 11.90 | 12.00 | 216 |
+| concourse piers | 1.0 x 5.25 x 6 each | flush | - | 36 |
+
+The support came out at the **same** 144 models as the four walls it replaced,
+which is worth recording because the intuition is the other way round: four
+walls each paid for their own tiling and for the twin that finishes them, and
+drew every corner twice.
+
+The concourse's deck went from 2 m to **6 m** deep (`CONCOURSE_DECK = PITCH *
+0.5`) for the same reason - a 2 m slab on two piers reads as a lid on legs - and
+it still leaves 6 m of headroom over the road underneath, more than the stock
+street templates ask for. Filling the footprint at *grade* is still not
+available: the 16 m entrance road runs through the middle of that cell, and the
+piers at x = +-12 are what clear it.
+
+### Third report, and the piece was two planes all along
+
+*"The meshes still are composed of stacks of polygons, all in the same plane.
+The volume is correct."*
+
+The volume was correct. The piece was not. `tools/meshfaces.py` reads a model's
+vertex buffer instead of believing its `boundingInfo`, and the answer took one
+command:
+
+| model | declared box | mesh box | faces | triangles |
+| --- | --- | --- | --- | --- |
+| `stone_abut_rep_rep.mdl` | 4.43 x 4.00 x 2.00 | 3.43 x 4.00 x 2.00 | **2** | **4** |
+
+Four triangles across two faces: the piece is a **pair of parallel planes**, the
+two sides of a box with nothing between or around them. That is all a bridge
+ever needed of it, since the rest is buried in the abutment. Every version of
+the supports - four walls, wider walls, a filled volume - was therefore an
+envelope made of flat faces, and the three rounds spent on insets, tile sizes
+and fill patterns could not have fixed it. The `boundingInfo` is not the
+geometry and neither is the collider: here the collider *is* the geometry, which
+is why `drawn` in the log was right every time while the art was wrong.
+
+The stock library has no neutral solid block to swap in. It has closed boxes
+whose collider is three times their mesh (`placeholders/unit_cube.mdl`), and
+exact closed boxes that are plywood piles and advertising hoardings. So
+`support_block.mdl` is assembled from the two halves that are right: the game's
+own unit cube mesh - 8 vertices, 12 triangles, all six faces - and the stone
+abutment's material, both by absolute path, which stock models use freely (695
+absolute mesh references and 8354 material references across the shipped
+`.mdl`s). Its collider is declared as exactly its mesh.
+
+That one property deletes most of the geometry code. A box is now one instance:
+scale by its size, translate to its centre. No tiling, no twin copy turned 180
+degrees, no overhang allowance - so `tileCount`, `fitSpan`, `SUPPORT_TILE`,
+`SUPPORT_BRICK_*` and `brickWall` all went, 132 lines of them, and the only
+inset left is `SUPPORT_SEAM`.
+
+| | before | now |
+| --- | --- | --- |
+| support, 5.0 x 7.8 cell | 4.34 x 7.60 of flat faces, 144 models | 4.80 x 7.60 solid, **6 models** |
+| concourse | 23.19 x 5.25 + piers, 252 models | 23.80 x 5.80 solid, **9 models** |
+| inset per side | seam + collider allowance | seam, 0.1 m |
+
+The one thing that can still go wrong is the thing that has never been tried
+here: **this is the first resource the mod ships rather than borrows**, and an
+id the engine cannot find draws a missing-model cube or nothing at all, with no
+complaint in the log. So `checkBlock` asks `api.res.modelRep.find` once per
+session and logs the answer, including "could not ask" if that API is not
+reachable from the module thread. The id is `multi_layer_stations_1::/support_block.mdl`,
+the same shape the modules use, and `_content.json` lists the file.
+
+### A forward reference compiles and then reads nil
+
+Moving the constants around for this put `SUPPORT_TILE`'s declaration 75 lines
+*below* the `brickWall` that reads it. A Lua local is only an upvalue for code
+below it, so that reads a nil global - `tileCount(length, nil)` - on the first
+rebuild, in the game, after a deploy and a restart. `tools/luacheck.py` could
+not see it: it checked whether a name is a local in the file, not whether it is
+one *yet*.
+
+It does now, and it is worth having for a file this size: every definition
+records the line it is declared on, and a call or a SCREAMING_CASE read above
+that line is a warning. Clean on both mods, and it catches the case in a
+five-line test file.
+
+## Round fifteen: the deck lands on the concourse, and -15 m is the limit
+
+**2026-10-13, on request:** *"Currently, there is room for 3 tracks or
+platforms between the concourse and the default platform. I think it makes sense
+to shift the platform by 15 meters so they align."*
+
+Three columns of room, and the count is exact. In construction space:
+
+- the quarter turn maps a rail-local `(x, y)` to `(-y, x)`, so a rail **column**
+  - the 5 m pitch across the platforms - sits at construction `y = 5i`, and the
+  40 m tiles run along construction x;
+- the seed puts the platform at `i = 0` and the track at `i = 1`, because
+  `TRACK_SLOT + 1000` is `1000 * i` in the rail station's id scheme. So the deck
+  was at `y = 0` and `y = 5`;
+- the street entrance is at `y = -15` and the concourse cell runs from there to
+  `y = -21`.
+
+Which leaves `y = -5`, `-10` and `-15` unused between them: 15 m, exactly as
+reported from the game. `RAIL_SHIFT_Y = -15` closes it, and the three spare
+columns move to the other side of the deck, over the bus platforms, where a
+player can extend into them.
+
+### -15 is not a round number, it is the limit
+
+Centring the platform on the concourse would want `-18`, and lining its far edge
+up with the concourse's would want `-17.5`. Both are worse than they look, and
+the reason is round thirteen's rule:
+
+| shift | platform origin | what the clip leaves it |
+| --- | --- | --- |
+| **-15.0** | y = -15.0 | **39.0 x 2.5 m** - cut back to the entrance's edge |
+| -17.5 | y = -17.5 | zeroed |
+| -18.0 | y = -18.0 | zeroed |
+
+The entrance reserves `x = -8 .. 8` by `y = -30 .. -15`. A slot whose origin is
+*inside* that rectangle cannot keep a reservation at all, because `spacing` is
+four distances from the origin and no single cut leaves a rectangle containing
+it - so it is zeroed, and a **track** module that loses its rectangle can never
+be removed again. At `y = -15` the origin sits exactly on the boundary, which
+`clipFootprint`'s epsilon treats as outside, so the column keeps a 2.5 m strip
+and stays pickable.
+
+Checked against the clip rules offline before the game saw it, with the
+obstacles taken from the log:
+
+```
+seeded platform i=0  column at y= -15.0  keeps 39.0 x 2.5
+seeded track i=1     column at y= -10.0  keeps 39.0 x 5.0
+extend i=-1          column at y= -20.0  ZEROED -> not offered (round thirteen)
+extend i=2           column at y=  -5.0  keeps 29.5 x 5.0   (clipped by the bus platform)
+```
+
+So the default station now reads as: tracks crossing the entrance road on a deck
+that stands on the concourse, with the bus platforms beside it and three columns
+of room to extend over them. The 15 m of frontage that cannot carry a module is
+unchanged and is now *behind* the deck rather than in front of it.
+
+### What this does not solve
+
+Larger concourses. A 6 m cell under a 5 m column leaves the deck 0.5 m off
+centre either way, and a concourse of two or three columns' depth would want the
+cell sized from the pitch rather than from road clearance - which is the next
+thing to try, and the reason `CONCOURSE_D`'s own note about the 16 m road is
+worth reading first: it is the constraint that set 6 m, not taste.
+
+## Round sixteen: a column is four slots, and the deck may not hop the entrance
+
+**Measured in-game 2026-10-21**, the first session to see rounds thirteen to
+fifteen. Reported: *"I can extend it towards the street and beyond, except
+adjacent to the concourse. [...] However, it is possible to add a track or
+platform on the other side of the concourse. I don't like this behaviour. It
+should not be possible to extend the station on the side where the concourse is
+built, since that will become glitchy."*
+
+Both halves of that are round thirteen's guard being exactly as literal as it
+was written to be. The log decodes the session precisely, because a rail slot
+id is `base + 1000 * coordI + 10 * coordJ` and construction `y = 5 * coordI +
+RAIL_SHIFT_Y`, `x = -40 * coordJ`:
+
+| slot added | coordI, coordJ | construction (x, y) | where that is |
+| --- | --- | --- | --- |
+| `8402000` | 2, 0 | (0, -5) | away from the street, over the bus platforms |
+| `8398990` | -1, -1 | (40, -20) | **over the entrance's column**, one tile along |
+| `8399010` | -1, 1 | (-40, -20) | the same column, the other way |
+| `8397990` | -2, -1 | (40, -25) | the next column in, off to one side |
+| `8397000` | -3, 0 | (0, -30) | on the entrance's far edge |
+| `8394000` | -6, 0 | (0, -45) | **past** the entrance entirely |
+
+And nothing at `(0, -20)` or `(0, -25)`, which is the whole of what the guard
+withheld: the two tiles directly over the entrance. That is the "except
+adjacent to the concourse" in the report, and it is the guard working.
+
+The trouble is the shape of what it protects. The entrance reserves 16 m of x
+and a track tile is 40 m long, so **only the tile over the entrance loses its
+rectangle**; its neighbours in the same column, 40 m away along the track, are
+clear in x and keep theirs. Two columns further in, the entrance's 15 m of y is
+behind you and every tile is clear again. So the deck could grow around the
+road and carry on past it, with a hole in it at the one place a train actually
+has to cross - and the hole is not removable, so the player cannot even fix it
+by hand.
+
+### The rule is the deck's, not the slot's
+
+`dropUnreservableRailSlots` now runs a second pass: find the nearest **blocked
+deck column** on each side of the columns that are occupied, and withhold every
+empty rail slot at or past it.
+
+- only `DECK_SLOT_TYPES` - `track`, `passenger_platform`, `cargo_platform` -
+  propagate. A building or roof slot that cannot keep a rectangle says nothing
+  about whether the deck can continue, and treating it as a stop would withhold
+  half the deck for a size3 building slot overhanging a bus platform.
+- the anchor is the occupied columns, so the two sides are independent: a
+  second entrance on the other side of the station stops that side only.
+- it never drops an occupied slot, for the same reason the first pass does not:
+  an orphaned module is a configuration the engine can call invalid outright.
+- with the deck deleted down to nothing the anchor falls back to `RAIL_SHIFT_Y`,
+  the seeded platform's own column, so an empty deck still has a street side.
+
+The new log line reports what it found and is worth reading even when it drops
+nothing, because it is the only confirmation that the first pass blocks what we
+think it blocks:
+
+    deck columns blocked at y = -20.0, -25.0; rail slots not offered because the
+    deck cannot reach past one: 24 (y <= -20.0). The deck ends where the
+    entrance starts.
+
+`y = none` would mean the refusal the player sees at the entrance comes from
+somewhere else - the engine's own collision check, say - and that the second
+pass is inert.
+
+### The concourse is seeded again
+
+Asked in the same session: *"Am I correct to assume that the concourse was not
+added by default? If so, you may do that in the single location where I can
+actually build it."* Correct - it has not been seeded since round six - and it
+is now, at `CONCOURSE_SLOT_BASE + streetMangle(55, 0, 0)`, the entrance's slot
+id with its variant digits cleared.
+
+Round six unseeded it because module removal broke while a concourse was in the
+build; round seven found the real cause (reservations zeroed to nothing) and
+rounds nine to twelve rebuilt the slot so the concourse is picked from a clear
+band at its pier. What seeding re-exposes is the engine asymmetry, not that bug:
+a **seeded** module's geometry is checked against the *world* at placement,
+where a player-added one is only checked against the construction. So the test
+is placing the station **snapped to a road**, and what has to clear the road is
+the hole in the 24 x 6 m cell rather than the cell.
+
+The other test is removal with a concourse in the build, and this session did
+not do it: the concourse went in last, at 14:05:20Z, and nothing was deleted
+afterwards. Round six's symptom was exactly that, so it is the first thing to
+try next time, alongside deleting a **support** - also never deleted since the
+meshes were made solid, which is what round three's open question is waiting on.
+
+### High-speed track is not obsolete, and the module list is not where you change it
+
+Also asked: *"I don't have the high speed upgrade tool. I started the game in
+2020. Is it possible the other track types are obsolete?"* No. Every track type
+the player can build is `yearTo = 0`, which never expires:
+
+| street template | `yearFrom` | menu |
+| --- | --- | --- |
+| `track/simple/simple` | 0 | tracks, order 3000 |
+| `track/simple/simple_catenary` | 1921 | tracks |
+| `track/standard/standard` | 1930 | tracks, order 3000 |
+| `track/standard/standard_catenary` | 1930 | tracks |
+| `track/high_speed/high_speed` | **1980** | tracks, order 5000 |
+| `track/high_speed/high_speed_catenary` | 1980 | tracks |
+
+So in 2020 all six are available. There is no separate "upgrade" tool for the
+track type: it is the ordinary **track tool from the Tracks menu with the type
+selected**, dragged over the station, and the engine turns that into
+`upgradeFn(..., constructionConfig.streetTemplate)` - the same entry point the
+catenary tool uses with `constructionConfig.catenary`. The station's own module
+list cannot change it, which is why nothing in the Buildings tab looks like a
+track type.
+
+Our gate on that path matches stock exactly, which is worth recording since it
+reads backwards: `isAffectedByToolFn` returns `desc.roadType == 0`, and stock's
+own comment is `-- 0: "TRACK"` (`modular_station.script.lua`). So 0 is a track
+and a road template is refused.
+
+### Corrected the same day: the track tool reports a *collision*
+
+*"Are you really sure about the high speed track type? It works that way for
+modules. But I was referring to the regular track tool. If I drag a high speed
+track over a regular track, I can't build it because it would collide."*
+
+Which is a different thing entirely, and the paragraph above answers a question
+nobody asked. A **collision** is the builder talking: the engine was laying new
+track across the construction, not offering it an upgrade. So the open question
+is not availability, it is whether the track tool ever routes the drag to this
+construction's `isAffectedByToolFn` at all - and there is no evidence either
+way, because the only `upgrade` lines any session has produced are the catenary
+tool's. The track-type branch of `upgradeFn` has never been observed running.
+
+Three things it could be, and they are distinguishable:
+
+1. **The engine never asks.** The track tool may only treat an existing *edge*
+   as upgradable, and a station's track is a module, reached by the catenary
+   tool through a different path (its log lines come from a `TrackModifierPool`
+   thread, which the builder is not).
+2. **It asks and the drag misses.** Our track is at +12 with the terrain at 0,
+   so a drag that looks like it is over the deck may be at grade, where it
+   genuinely does collide with the station.
+3. **It asks and we decline.** Least likely: the gate is stock's, byte for byte,
+   and returns true for any `roadType == 0` template.
+
+`isAffectedByToolFn` now logs what it was asked and what it answered, deduped,
+the same way `upgradeFn` has since round two of T4:
+
+    [multi-layer] tool add{streetTemplate=...high_speed} remove{nil} roadType=0 -> true
+
+Nothing logged while the cursor refuses means the first explanation, and the
+control test settles it without any of this: **drag high-speed over a stock
+modular rail station.** If stock collides too, the track tool is not how a
+station's track type is changed in this game, and the module list is - which is
+what the report says already works.
+
+**It is the first explanation - answered 2026-10-22.** The collision is correct
+behaviour and the track tool is not a route to a station's track type at all.
+Both routes that exist work: the upgrade tool, and replacing the module. See
+"Round seventeen".
+
+## Round seventeen: the three deletes, and the track type was never the track tool's
+
+**Measured in-game 2026-10-22.** Three open questions closed with four clicks,
+and every one of them closed the cheap way - by doing the thing, not by
+instrumenting it further. All three had been waiting a session or two with the
+code already in the state the test needed.
+
+### A support deletes. The collider overhang was never the obstacle
+
+Deleting a support works, with supports standing either side of it, with
+`SUPPORT_SEAM = 0.1` and `support_block.mdl` filling its cell to within 0.1 m on
+every side. So the last trace of round three is retired: a support's collider
+reaching the cell outline, and all but touching its neighbour's, is **not** what
+the bulldozer objects to.
+
+That is the second half of what round seven started. Round three read the old
+abutment's 0.70 m collider overhang as the reason a support could be placed and
+not removed, and the whole of `fitSpan`, `SUPPORT_TILE`, `tileCount` and the
+doubled-up twin copies existed to buy it off. Rounds four to six could still
+remove nothing with all of it in place; round seven fixed removal by clipping
+the **reservations**; and now the geometry that round three said would overlap
+its neighbours deletes without complaint. Nothing about the drawn shape was ever
+load-bearing - only the rectangle.
+
+The practical gain is that the cells can stay full. There is no allowance left to
+reinstate and no reason to shrink a pier again.
+
+### A platform deletes with the concourse in the build
+
+Round six's exact condition, finally run: the concourse seeded, in the build,
+and a platform deleted. It goes.
+
+So the concourse as it stands since rounds nine to twelve - picked from a clear
+2 m band at its pier, reservations clipped rather than zeroed - does not veto the
+configuration the way the round-six version did. Round six's reading was right
+about *that* build and wrong as a rule: it was never the concourse's presence,
+it was the reservations it was carrying.
+
+What is still untested, and now deliberately so, is whether a **cross-level
+reservation overlap** vetoes a removal at all. No build has one left to find out
+with; answering it would mean putting one back on purpose, and nothing needs the
+answer.
+
+### A seeded concourse places against a road
+
+T5a steps 1-2, the asymmetry round sixteen flagged: a seeded module's geometry
+is checked against the **world** at placement, where a player-added one is only
+checked against the construction. Placing the station snapped to an existing
+road works, and so does demolishing the concourse and putting it back with the
+road already there.
+
+So the hole in the 24 x 6 m cell is wide enough for the entrance road it has to
+clear, which is the thing the design rests on. Round fifteen's -15 m limit and
+`CONCOURSE_PICK_X` are both confirmed by a placement that would have failed
+under either of the two earlier geometries.
+
+### The track tool's collision is correct, and the module list is one of two routes
+
+The control test from round sixteen, answered by the report rather than by the
+log: dragging high-speed track over the station collides, and **it is supposed
+to**. That is the builder laying new track, not an upgrade path, and it behaves
+the same against stock.
+
+A station's track type is changed two ways, both of which work here:
+
+- **the upgrade tool**, which is the path `upgradeFn` serves and the one the
+  catenary already proved on 2026-10-21, and
+- **placing a new track module over the existing one**, which is the module list
+  doing it.
+
+So explanation 1 of the three in round sixteen is the right one - the engine
+never asks the track tool's drag about this construction - and it is not a
+defect. `isAffectedByToolFn`'s logging stays, because it is what made the
+distinction checkable, but there is nothing left for it to catch here.
+
+One thing is genuinely missing and is parked: **the upgrade tool offers no
+high-speed variant.** Availability by year is not it - round sixteen's table has
+all six templates live from 1980 - so it is either where the upgrade tool gets
+its list from or something about the pairing of types, and it is a question for a
+later session. Standard and catenary are enough for v0.1.
+
 ## Open questions
+
+- ~~Why can a support be placed and a concourse not?~~ **Position - answered
+  2026-10-13.** The probe slot took the module and the real one never did, with
+  nothing else differing between them. See "Round nine"; the fix is
+  `CONCOURSE_PICK_X`.
+
+- ~~Does the engine pick a slot by its rectangle or by its origin?~~
+  **Neither, where something is standing - answered 2026-10-13.** The origin
+  was moved onto ground no stock slot reserves and the slot was still not
+  offered. See "Round ten".
+
+- ~~Is the buried support unplaceable as well?~~ **Yes - answered 2026-10-13.**
+  `674000001` never took a module while `674000003` and `674000005`, its
+  neighbours in the same tiled row, both did. Second confirmation of the rule,
+  in a different family.
+
+- ~~Does `dependentSlots` carry the click?~~ **Not on its own - answered
+  2026-10-13.** Both entries reached the engine and neither slot became
+  placeable. It may still be the second half of stock's idiom; what it is not is
+  a way in for a slot that reserves overlapping ground. See round eleven.
+
+- ~~Does an overlapping reservation disqualify a slot, or does stock's zero plus
+  a dependency let it in?~~ **The reservation is the filter - answered
+  2026-10-13.** Side by side at one entrance, the clear 2 m band took four
+  modules and the zero-plus-dependency took none. See "Round twelve".
+
+- ~~Is the brick's collider overhang actually what the bulldozer objects to?~~
+  **No - answered 2026-10-22.** A support deletes with its cell filled to within
+  0.1 m and neighbours either side of it, so the drawn shape was never the
+  obstacle and the reservations always were. Round three is retired and the
+  allowance it bought is gone. See "Round seventeen".
+
+- **Does the engine accept a negative `spacing` component?** Open, 2026-10-13.
+  It is the difference between "the deck stops at the entrance" and "the deck
+  crosses it with the part of its column that is clear" - see round thirteen -
+  and it would also widen the concourse's own 2 m pick band. Everything written
+  here about rectangles having to contain the slot's origin rests on `spacing`
+  being four *distances*; nothing has tested whether a negative one is read as
+  an offset or clamped.
+
+- **Does an *empty* stock reservation disqualify a slot too, or only an occupied
+  one?** Open, 2026-10-13. The band that works (x = 10 .. 12) is clear of both
+  the occupied entrance at +-8 and the empty `large_building` slot at +-10, so
+  the measurement does not separate them. It is worth knowing, because if only
+  occupied rectangles count the band could be 8 .. 12 - twice the target - and
+  `trimReservations` already has the machinery to cut a rectangle clear of an
+  obstacle and keep the origin inside it. Cheap to test: widen
+  `CONCOURSE_FLANK_HALF` to 2 and move `CONCOURSE_FLANK` to 10, and see whether
+  the pip survives.
+
+- **How does stock's own platform roof get offered, then?** Open, 2026-10-13.
+  It reserves nothing and is listed in `dependentSlots`, which in our hands
+  produced no pip. Either the engine treats a roof type specially, or
+  `dependentSlots` works only in some configuration ours does not reproduce (a
+  roof sits 2 m directly **above** its parent, same x and y; ours was 3 m to the
+  side at the same height), or roofs are reached some third way. Not needed for
+  this mod any more - the rule in round twelve is enough to build on - but it is
+  the one thing that would make a stacked slot clickable without spending a
+  rectangle on it.
+
+- **What are `autoFill`, `maxModules` and `message` for?** Open, 2026-10-13.
+  All three are slot or `slotConfig` fields the engine reads and this mod does
+  not set. Stock sets `maxModules = -1` on every street slot type and
+  `-8-2` on a harbor one (`harbor_modular.script.lua:128`), so negative is not
+  a disabled flag but an expression of something; `message` is `""` everywhere
+  except `street_terminal_exit`, which carries "You shall not pass"; and
+  `modules_util::GetNumAndFilledAutoFillSlots` plus `autoFillSlots` on
+  `SimpleProposal` say `autoFill` is about slots the engine fills itself. None
+  of it is needed yet. It is written down because a slot field we do not
+  understand is exactly the shape of the last four rounds.
 
 - ~~Does zeroing the slot reservations restore module removal?~~ **No -
   answered 2026-10-12.** It was in place throughout rounds five and six while
@@ -1413,10 +2365,13 @@ Repaired, and both mods check clean.
   now a clip rather than a wipe. See "Round seven". What is still **unknown** is
   whether a cross-level reservation overlap vetoes a removal *at all*; the next
   build no longer has one to find out with, so answering it would mean putting
-  one back deliberately.
+  one back deliberately. Round seventeen leaves it there on purpose: deleting a
+  platform with the concourse in the build now works, so nothing needs the
+  answer.
 - **Does the bulldozer's flat check look at module *geometry* as well as slot
-  reservations?** Nothing has ruled it out, and it is the remaining suspect if a
-  removal is ever refused again with no overlapping rectangle in the log. The
+  reservations?** Round seventeen makes this unlikely - a block filling its cell
+  to 0.1 m deletes - but it is not ruled out, and it is the remaining suspect if
+  a removal is ever refused again with no overlapping rectangle in the log. The
   test is to emit a module's models untagged, as construction geometry
   (`result.models` directly rather than through `addModel`), and see whether the
   refusal follows the tag or the geometry.
@@ -1443,3 +2398,8 @@ Repaired, and both mods check clean.
 - Does the engine reject construction geometry at z > 0 with no support beneath
   it? The roof at 5.5 m and the main buildings say no, but no stock construction
   puts a *track* up there.
+- **Why does the upgrade tool offer no high-speed variant?** Open, 2026-10-22,
+  and parked. Both routes to a station's track type work - the upgrade tool and
+  replacing the module - but high speed appears in neither tool list, while
+  round sixteen's table says all six templates are live from 1980. See "Round
+  seventeen".

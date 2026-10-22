@@ -6,9 +6,14 @@ process launch, needs the game closed, and has proved flaky. This compiles each
 file with a real Lua front end instead, which catches the whole class of error
 that otherwise shows up in-game as "my constructions are missing from the menu".
 
-It only checks that the file *parses*. It knows nothing about the game's
-globals, so it cannot tell you a resource name is wrong or that `log.message`
-exists - it is a syntax gate, not a validator.
+It only checks that the file *parses*, plus two things a parse cannot see: a
+bare name that is never a local in the file, and a name used **above** the
+`local` that declares it. Both compile and then read a nil global in the game -
+the second one cost a deploy-and-restart cycle on 2026-10-13, when a constant
+moved below the function that reads it.
+
+It knows nothing about the game's globals, so it cannot tell you a resource name
+is wrong or that `log.message` exists - it is a syntax gate, not a validator.
 
     python tools/luacheck.py <file-or-dir> [...]
 
@@ -80,9 +85,19 @@ def check_calls(path, src):
     stripped = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', stripped)
     stripped = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", stripped)
 
-    defined = set()
+    # Where each name is first declared, not just whether it is. A local is
+    # only an upvalue for code *below* it: a function that reads a constant
+    # declared further down the file compiles fine and reads a nil global at
+    # runtime, which is a broken rebuild in the game and nothing here.
+    defined = {}
+
+    def declare(name, pos):
+        line = stripped[:pos].count("\n") + 1
+        if name not in defined or line < defined[name]:
+            defined[name] = line
+
     for m in DEF_RE.finditer(stripped):
-        defined.add(m.group(1) or m.group(2))
+        declare(m.group(1) or m.group(2), m.start())
 
     # Function parameters count as definitions too. Callbacks handed to the
     # engine take their collaborators as arguments - a module's updateFn is
@@ -91,14 +106,21 @@ def check_calls(path, src):
         for part in m.group(1).split(","):
             part = part.strip()
             if re.match(r"^[A-Za-z_]\w*$", part):
-                defined.add(part)
+                declare(part, m.start())
 
     missing = {}
+
+    def use(name, pos, how):
+        if name in GAME_GLOBALS or name in LUA_KEYWORDS:
+            return
+        line = stripped[:pos].count("\n") + 1
+        if name not in defined:
+            missing.setdefault(name, (line, how, None))
+        elif defined[name] > line:
+            missing.setdefault(name, (line, how, defined[name]))
+
     for m in CALL_RE.finditer(stripped):
-        name = m.group(1)
-        if name in defined or name in GAME_GLOBALS or name in LUA_KEYWORDS:
-            continue
-        missing.setdefault(name, (stripped[:m.start()].count("\n") + 1, "calls"))
+        use(m.group(1), m.start(), "calls")
 
     # SCREAMING_CASE names read as values, not calls. A deleted `local DECK =`
     # leaves `{ id = DECK }` compiling fine and then failing in the game as
@@ -106,14 +128,16 @@ def check_calls(path, src):
     # convention is checked, because a lowercase bare name has too many
     # legitimate reasons to be a global.
     for m in CONST_RE.finditer(stripped):
-        name = m.group(1)
-        if name in defined or name in GAME_GLOBALS or name in LUA_KEYWORDS:
-            continue
-        missing.setdefault(name, (stripped[:m.start()].count("\n") + 1, "reads"))
+        use(m.group(1), m.start(), "reads")
 
-    for name, (line, how) in sorted(missing.items(), key=lambda kv: kv[1][0]):
-        print("WARN %s:%d %s '%s', which is not a local in this file"
-              % (path, line, how, name))
+    for name, (line, how, declared) in sorted(missing.items(),
+                                              key=lambda kv: kv[1][0]):
+        if declared is None:
+            print("WARN %s:%d %s '%s', which is not a local in this file"
+                  % (path, line, how, name))
+        else:
+            print("WARN %s:%d %s '%s' before its local, declared at line %d"
+                  % (path, line, how, name, declared))
     return not missing
 
 

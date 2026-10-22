@@ -1,0 +1,74 @@
+-- A solid 1 x 1 x 1 m block of stone, centred on its own origin, whose collider
+-- is exactly its mesh.
+--
+-- **Why this file exists.** The placeholder geometry in this mod was built out
+-- of `/infrastructure/bridge/stone/stone_abut_rep_rep.mdl`, scaled to whatever
+-- cell it had to fill. Reported from the game, three rounds running: "I see
+-- parallel faces that suggest the total shape of the envelope, not a full solid
+-- shape". Reading the mesh settles why (`tools/meshfaces.py`):
+--
+--   model                      mesh box             faces  triangles
+--   stone_abut_rep_rep.mdl     3.43 x 4.00 x 2.00   2      4
+--
+-- Two faces. Four triangles. The piece is a *pair of parallel planes* - the two
+-- sides of a box with nothing between or around them - which is all a bridge
+-- ever needed of it, since the rest is buried in the abutment. No amount of
+-- scaling, tiling or filling turns that into a solid, which is why widening it
+-- and then filling the volume with it both failed.
+--
+-- The stock library has no neutral solid block to swap in. It has closed boxes
+-- whose collider is three times their mesh (`placeholders/unit_cube.mdl`), and
+-- it has exact closed boxes that are plywood piles and advertising hoardings.
+-- So this is assembled from the two halves that are right:
+--
+--  * `/placeholders/msh/cube_1x1_lod0.msh`, the game's own unit cube - 8
+--    vertices, 12 triangles, all six faces, centred on the origin;
+--  * the stone abutment's material, so the supports still read as masonry.
+--
+-- Absolute resource paths, which stock models use freely (695 absolute mesh
+-- references and 8354 absolute material references across the shipped `.mdl`
+-- files), so nothing is copied into this mod.
+--
+-- **The collider is the point as much as the mesh is.** It is declared as
+-- exactly the mesh, so this piece can be scaled to a cell and stand flush
+-- inside it: no overhang to compensate for, which is what `fitSpan`,
+-- `SUPPORT_TILE` and the doubled-up "twin" copies all used to pay for, and no
+-- offset between what is drawn and what the engine thinks is there - a collider
+-- that floats above its geometry would be a module the cursor cannot find (see
+-- `multi_layer_station.script.lua`, `trimReservations`, on what a zeroed slot
+-- leaves behind).
+function data()
+return {
+	boundingInfo = {
+		bbMax = { 0.5, 0.5, 0.5, },
+		bbMin = { -0.5, -0.5, -0.5, },
+	},
+	collider = {
+		params = {
+			halfExtents = { 0.5, 0.5, 0.5, },
+		},
+		transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },
+		type = "BOX",
+	},
+	lods = {
+		{
+			node = {
+				children = {
+					{
+						materials = { "/infrastructure/bridge/stone/mat/stone_abut.mtl", },
+						mesh = "/placeholders/msh/cube_1x1_lod0.msh",
+						name = "support_block",
+						transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },
+					},
+				},
+				name = "RootNode",
+				transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },
+			},
+			visibleFrom = 0,
+			visibleTo = 2000,
+		},
+	},
+	metadata = { },
+	version = 2,
+}
+end

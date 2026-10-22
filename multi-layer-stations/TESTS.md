@@ -65,13 +65,14 @@ ignored:
 
 | log line | what it means |
 | --- | --- |
-| `seeded: rail 4 tiles (160 m, era c) + station building + 1 bus platform` | `createTemplateFn` ran |
+| `seeded: rail 4 tiles (160 m, era c) + 1 bus platform + entrance + 1 concourse` | `createTemplateFn` ran |
 | `rail slot types: ...` | the rail family's slot inventory, for checking against `addSupportSlots` |
 | `support footprints: ...` | what size support slot each thing above got |
 | `snapPoint: transl=(...) fromStreetResult=false` | `false` is correct - the module's snap point won, not the hook's default |
 | `built: N support slots, 2 subconstructions, 2 stations, ...` | the summary; **2 stations is the number to check** |
 | `linked levels: (...) -> (...)` | the pedestrian link was created |
 | `module add/remove slot=... via=street\|plain modules=N->M` | one line per module edit. `via=street` means the paired-platform rule ran; `N->M` is the map size, and a delete that is being applied shows `M = N-1` |
+| `deck columns blocked at y = ...; rail slots not offered because the deck cannot reach past one: N` | the deck's street-side limit. `y = none` means the first-pass guard is not blocking the entrance column and the second pass is inert - see round sixteen |
 | **`track edge list N has ... and no snapNodes`** | module editing will break as soon as a track is connected |
 | **`N support module(s) have no slot any more`** | the level above them was removed; the engine will drop them |
 | **`no pedestrian link possible`** | T6 failed - no interchange between levels |
@@ -139,6 +140,20 @@ the stock scripts.
    and a station that still works; that is the designed behaviour, not a bug.
 6. Delete every rail module. The construction should survive as a bus station
    with an empty deck rather than erroring.
+7. **Extend the deck towards the street entrance, as far as it will go, then
+   delete the tiles again.** This is the round-thirteen case. The deck must stop
+   one tile short of the entrance - no platform or track slot is offered over
+   it, because a module there could never be removed again (`NOTES.md`, round
+   thirteen) - and every tile that *is* offered must delete again afterwards.
+   The log line to read is
+
+       rail slots not offered, because no reservation of theirs would survive
+       the level below: N
+
+   with N going up as the deck approaches the entrance. A tile that is offered
+   and then will not highlight for the delete tool is the bug this guard exists
+   to prevent, and the recovery is to remove the entrance module, delete the
+   tile, and put the entrance back.
 
 Watch for: geometry at +24 (a double lift), anything at grade that belongs
 above, the terrain following a newly added tile, and `0 subconstructions`.
@@ -174,8 +189,14 @@ elevated track was permanently plain, non-electrified standard track.
 2. Run an electric locomotive to the upper level. This is the test - poles that
    render but do not electrify the track look identical.
 3. Remove the catenary again.
-4. Take the **track-type tool** (high speed) and drag it over the elevated
-   track. Expect the track type to change along the row.
+4. Change the **track type**, the two ways that exist: with the **upgrade
+   tool**, and by **placing a new track module over** the existing one. Both
+   pass (2026-10-22). Dragging track from the Tracks menu is *not* one of them -
+   it reports a collision because it is the builder laying new track, which is
+   also what it does to a stock station. The one thing still outstanding is that
+   the upgrade tool lists no **high-speed** variant, which is parked (round
+   seventeen) and not about this construction: every track type is `yearTo = 0`
+   and high speed is live from 1980.
 5. Drag the **road upgrade tool** over the bus station. Expect nothing to
    happen to the construction: rail's `isAffectedByToolFn` returns false for a
    road template, which is the stock bus station's behaviour too.
@@ -386,12 +407,13 @@ Quick, and each one is a thing a player will do in the first hour.
 | T1 place + passengers both levels | pass 2026-10-09 | both levels carry passengers and **transfer between them** - settles the StationGroup question |
 | T2 edit elevated level, unconnected | pass 2026-10-09 | underpasses, extra tracks and extra platforms all work |
 | T2 edit elevated level, **track connected** | pass 2026-10-09 | was broken by the `snapNodes` conversion; fixed |
+| T2 extend the deck to the entrance *(new)* | **pass 2026-10-21** | first attempt was a half pass: the tile over the entrance was withheld as designed, but a column is four tiles and the entrance covers only one of them, so the deck grew around the road and continued past it, leaving a hole over the crossing that could never be removed. Second pass added the same day and confirmed in the next session - `deck columns blocked at y = -22.5, -20.0, -17.5; rail slots not offered because the deck cannot reach past one: 104 (y <= -17.5)`, nothing offered on that side, and the far side still extends (columns at y = -5, 0, +5 all took modules). Round sixteen |
 | T2 edit elevated level, **re-check after the deletion bug** | pass 2026-10-12 | add and delete platforms and tracks, then re-add and delete again. Regressed twice in one day and both causes were elsewhere: a seeded concourse, whose slot is derived from the street entrance, and then the zeroed rail slot reservations added while chasing it - a track module's only model is invisible and collider-less, so the slot rectangle is the only thing the cursor can find it by. See `NOTES.md`, "Round seven" |
 | T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
-| T4 upgrade tools *(new)* | **pass 2026-10-12** (step 1) | two failures first, same symptom both times. 10-09: `isAffectedByToolFn` was delegated and would not resolve on the tool thread, so the tool never offered the station. 10-12: the tool offered it and `upgradeFn` declined, on a gate reading `entry.metadata` - a field that only exists on the `updateFn` entry. Resolved from `api.res.moduleRep` instead and the catenary tool works. The track-type tool is the same code path with the other branch; the open question is the electric loco actually running |
-| T5a concourse *(new)* | | |
-| T5 supports | | |
-| T6 pedestrian link *(new)* | | |
+| T4 upgrade tools *(new)* | **pass 2026-10-22** | steps 1-3 and 5-6 on 10-21: the catenary goes on, an **electric locomotive runs**, and it comes off again; removing it raises the game's own "line is incomplete" notice, which clears when it goes back on - correct behaviour, not a fault. Two earlier failures, same symptom both times: 10-09 `isAffectedByToolFn` would not resolve on the tool thread; 10-12 `upgradeFn` declined on a gate reading `entry.metadata`. Step 4 closed 10-22: dragging track from the Tracks menu **collides, as it should** - that is the builder, not an upgrade path. The two real routes both work, the upgrade tool and replacing the module. Separately parked: the upgrade tool lists no high-speed variant. Round seventeen |
+| T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
+| T5 supports | **place and delete pass 2026-10-22** | seven solid blocks, filling their cells, lining up with each other. A support **deletes** with neighbours either side and its cell filled to within 0.1 m, which retires round three: the collider overhang was never what the bulldozer objected to, and there is no allowance left to reinstate. One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
+| T6 pedestrian link *(new)* | partial 2026-10-21 | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 - a passenger actually completing bus-to-train - is untested |
 | T7 save / reload / rebuild | | |
 | T8 mod removal | | |
 | T9 awkward cases | | |
