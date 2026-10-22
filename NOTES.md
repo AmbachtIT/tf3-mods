@@ -691,6 +691,72 @@ texture '::/placeholders/mat/tex/unkown_texture.dds'`, which is the placeholder
 material arriving (the misspelling is the game's).
 
 
+## A mod can add its own build-menu categories
+
+**Confirmed in-game 2026-10-22** with `multi-layer-stations`, which now has a
+category of its own in the ROAD menu for its station and another in the MODULES
+menu for its two modules.
+
+The categories look like engine furniture - most are shipped from
+`gui/construction/menu/menu_categories/` and `.../modules_categories/` - but
+they are ordinary resources, and the menu collects them by **type** rather than
+from a list:
+
+```lua
+local allCategoriesIds = api.res.genericRep.getAllOfType("menu_category")
+```
+
+(`gui/construction/construction_react_util.tl`). So a resource of that type is
+picked up wherever it lives, including from a mod's own `content/`. Stock does
+this too, which is the precedent worth citing when it looks too easy:
+`street/country/category_roads_country.res.lua` sits in a content folder, not
+in `gui/`.
+
+A category is six fields:
+
+```lua
+function data()
+	return {
+		type = "menu_category",
+		data = {
+			category = "ml_station",                        -- the id
+			order = 150,                                     -- within the menu
+			name = _("Multi-layer Stations"),
+			icon = resolve("category_ml_station.tga"),
+			menu = "ROAD",
+		}
+	}
+end
+```
+
+- **`category`** is the id a construction's or module's
+  `menuCategory.categories[].category` names. `filterCategories` is a different
+  axis - "passenger" / "cargo" - and is not a menu category.
+- **`menu`** picks the top-level menu. The 49 shipped categories use ROAD,
+  ROADS, RAIL, TRACKS, WATER, AIR, INDUSTRY, LANDSCAPING, TOWN, PERKS,
+  WAREHOUSE and MODULES.
+- **`order`** sorts within one menu, and the stock numbers are worth knowing
+  before picking one. ROAD: Buildings 100, Tools 1000, assets 8000. MODULES:
+  Plots and Warehouse 0, Decoration 3, Platforms 2000, Building 3000, Landing /
+  Road Access / Tracks 4000, Misc 5000.
+- **`icon`** is `resolve()`d against the resource's own folder, and the file
+  beside it must be named `<name>@2x.tga`: the `@2x` is the engine's suffix,
+  not part of the name, and stock ships only that variant. Measured off the
+  stock icons, which `tools/make_menu_icon.py` reproduces exactly: **48 x 48,
+  8 bits per pixel, TGA image type 3** (uncompressed greyscale), descriptor
+  0x00 so rows are bottom-up, bright glyph on a black field with a few
+  intermediate values along the edges - the byte is coverage, not colour.
+  `building@2x.tga` is 1342 bytes of 0, 885 of 255 and a handful between, and a
+  generated icon of the same dimensions comes out at the same 2322 bytes.
+- An **empty category is not shown**, so a category that does not appear is
+  usually an id that does not match rather than a resource that was ignored.
+
+Worth knowing for any mod that adds more than one or two constructables:
+putting them in a stock category means competing on `order` with content the
+player already knows, and a category of one's own costs a 40-line resource and
+a 2 KB icon.
+
+
 ## A reused mesh brings its UVs, and a scaled box smears one crop of the texture
 
 **Measured 2026-10-22**, the first time `multi-layer-stations` actually drew its

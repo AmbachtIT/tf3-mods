@@ -90,7 +90,10 @@ Nothing in that list should appear in bold during a clean run.
 
 The baseline, and the point is to establish a known-good state to edit from.
 
-1. Road buildings tab, passenger filter, **Multi-layer Station**. Place it on
+1. Road menu, **Multi-layer Stations** category (its own, since 2026-10-22 -
+   not the stock Buildings category), passenger filter, **Multi-layer Station**.
+   The support and the concourse live under **Multi-layer** in the module menu.
+   Place it on
    flat ground against a road.
 2. Check: it snaps by the **end of its bus entrance**, not by its centre. The
    log's `snapPoint` line says which.

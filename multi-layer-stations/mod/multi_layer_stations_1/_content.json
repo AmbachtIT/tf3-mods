@@ -5,6 +5,10 @@
         "multi_layer_station.script.lua",
         "ml_support.module.lua",
         "ml_concourse.module.lua",
-        "support_block.mdl"
+        "support_block.mdl",
+        "category_ml_station.res.lua",
+        "category_ml_station@2x.tga",
+        "category_ml_modules.res.lua",
+        "category_ml_modules@2x.tga"
     ]
 }

@@ -46,10 +46,13 @@ return {
 	menuCategory = {
 		categories = {
 			{
-				category = "modules_building",
+				-- Our own category (`category_ml_modules.res.lua`), not
+				-- `modules_building`, as of 2026-10-22. The order now only
+				-- sorts the two modules in it against each other, and the
+				-- support comes first at 400 because it is the one a player
+				-- places repeatedly.
+				category = "ml_modules",
 				filterCategories = { "passenger" },
-				-- Ahead of the stock building modules (520-580), because on
-				-- this construction it is the one that has to be there.
 				order = 500,
 			},
 		},

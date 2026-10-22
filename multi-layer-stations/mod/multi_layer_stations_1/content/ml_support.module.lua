@@ -26,7 +26,9 @@ return {
 	menuCategory = {
 		categories = {
 			{
-				category = "modules_building",
+				-- Our own category (`category_ml_modules.res.lua`), shared
+				-- with the concourse, which sorts after this at 500.
+				category = "ml_modules",
 				filterCategories = { "passenger" },
 				order = 400,
 			},

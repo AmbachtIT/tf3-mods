@@ -65,7 +65,11 @@ local function makeConstructionTemplates()
 			menuCategory = {
 				categories = {
 					{
-						category = "road_buildings",
+						-- Our own category, shipped as
+						-- `category_ml_station.res.lua` - see that file for how
+						-- a mod can add one. It was `road_buildings`, among the
+						-- stock bus stops, until 2026-10-22.
+						category = "ml_station",
 						filterCategories = { "passenger" },
 						order = 1500,
 					},

@@ -102,6 +102,21 @@ Does not, yet: any choice of transport type per level, road-over-rail as well as
 rail-over-road, cargo, or anything below grade.
 
 
+## Where to find it in the build menu
+
+The mod ships two build-menu categories of its own rather than borrowing stock
+ones:
+
+- **Road menu -> Multi-layer Stations** - the station itself, sitting directly
+  after the stock Buildings category.
+- **Module menu -> Multi-layer** - the support and the concourse, after the
+  stock module categories and before Misc.
+
+A category is an ordinary resource (`type = "menu_category"`) that the build
+menu collects by type, so any mod can add one; root `NOTES.md` has the field
+list and the icon format, and `tools/make_menu_icon.py` draws the icons.
+
+
 ## Where the default station puts things
 
 The seeded deck lands **on the concourse**: the quarter turn puts the rail
