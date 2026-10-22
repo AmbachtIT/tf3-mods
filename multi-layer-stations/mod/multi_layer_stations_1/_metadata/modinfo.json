@@ -5,7 +5,7 @@
             "role": "CREATOR"
         }
     ],
-    "description": "Unlocks the vertical axis for station building. A multi-layer station puts an elevated train platform over a bus platform at street level, as two separate stations in one structure - connect a road to the lower level and a track to the upper one.\n\nAI Disclaimer: Claude Code was used to create this mod.",
+    "description": "Unlocks the vertical axis for station building. A multi-layer station puts an elevated train platform over a bus platform at street level, as two separate stations in one structure - connect a road to the lower level and a track to the upper one.\n\nKEEP THIS MOD ENABLED while a savegame contains any multi-layer station. The station is this mod, not a setting on a base-game one, so disabling the mod deletes every station you built with it and may leave the save unloadable. Bulldoze your multi-layer stations first if you want to remove the mod.\n\nBeta: the supports and the concourse are deliberate placeholder blocks, and the station cannot be supported under the tile where your track leaves it.\n\nAI Disclaimer: Claude Code was used to create this mod.",
     "name": "Multi-layer Stations",
     "summary": "Build an elevated train station over a bus station.",
     "tags": [

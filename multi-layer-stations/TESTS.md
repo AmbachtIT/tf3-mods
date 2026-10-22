@@ -416,38 +416,122 @@ serialisation, and it needs the second step to mean anything.
 
 ## T8 - mod removal
 
-`mod.json` declares `severityRemove: "Warning"`, which is a promise about what
-happens next.
+**Decided 2026-10-22, before the test rather than after it: assume the worst
+grade.** *"Let's assume C. Even if it's A or B now, it might very well degrade
+to C later on. For mods like these, having to keep the mod enabled while there
+are any stations in the save is acceptable."*
 
-1. From a save with a station placed, deactivate the mod for that savegame and
-   reload.
-2. Expect the station to be gone and the save to load. Confirm the mod is
-   genuinely inactive - the `Active mods:` block must not list it and
-   `[multi-layer]` must not appear anywhere in the session.
-3. Check the log against the clean-removal table in root `NOTES.md`: no `ERROR`
-   lines, no `placeholders/` or `missing_street_terminal.con` substitution.
-4. Reactivate and confirm the save still loads.
+So the three grades below are no longer something to measure and write down.
+They are a promise the mod declines to make: **keep the mod enabled while a
+save contains any multi-layer station.** The reasoning is about versions, not
+about today - the station's geometry, slot ids and module names all come from
+the mod, so a removal that grades A this week can grade C after any change to
+any of them, and a promise that has to be re-earned every release is worth
+less than no promise at all.
 
-Unlike `pick-single-platform-side`, this mod adds a construction rather than
-seeding a stock one, so removal destroys placed stations. That is expected; what
-is being tested is that it destroys them cleanly.
+| grade | what it looks like |
+| --- | --- |
+| A | the save loads, the stations are gone, everything else intact |
+| B | the save loads, but a line or a vehicle needs repairing by hand |
+| C | the save does not load |
+
+Where the promise now lives, which is the deliverable this replaces:
+
+- `_metadata/modinfo.json` - the listing text players read before installing,
+  in capitals near the top;
+- `README.md`, "Removing the mod", with the reasoning;
+- `mod.json`, `severityRemove: "Warning"`. **That is the loudest value there is
+  evidence for**: across the base game, the DLCs and every mod on this machine,
+  15 `mod.json` files use only `"None"` (13) and `"Warning"` (2), and the enum
+  itself is registered in the binary with no readable value list. A louder
+  string may simply not exist, and an invalid one risks the mod not loading at
+  all - which is a worse failure than a mild dialog. If `"Critical"` is ever
+  worth trying, the validator is the cheap check, and the game has to be closed
+  for it.
+
+What is still worth running, and it is two minutes rather than a session:
+
+1. **The recovery path.** Deactivate for a save with a station, load (expect
+   anything), then **reactivate and load again**. A player who toggles the mod
+   by accident or loses it to a failed download needs to know whether going
+   back works. This is the only question here whose answer changes what a
+   player should do.
+2. **What the dialog says.** Note the wording the game shows when deactivating,
+   once, so the README's claim and the game's own warning do not contradict
+   each other.
+
+Neither is a release blocker. A station that has to be bulldozed before the mod
+comes out is a documented condition of use.
 
 
 ## T9 - the awkward cases
 
-Quick, and each one is a thing a player will do in the first hour.
+Each one is a thing a player does in the first hour, and each one has a specific
+mechanism behind it rather than being a general poke. Quick to run; the value is
+in knowing what failure looks like before you see it.
 
-1. Place on a **slope**. It will cut into the hill; confirm it is usable rather
-   than broken.
-2. Place **two** of them adjacent, and overlapping in plan if the game lets you.
-3. Place one in **1900** and one in **1930**, to check era selection and that
-   `yearFrom = 1900` is honoured.
-4. **Bulldoze** one with lines running through both levels.
-5. Place one, then build a road **through** the structure at grade between
-   supports.
-6. Draw a track from the elevated level down to ground. Expect an embankment -
-   an accepted limitation, but confirm it does not bury the lower level, which
-   is the condition `NOTES.md` set for revisiting the decision.
+**All seven pass, 2026-10-22.** The notes below stay as the protocol and carry
+what each case was watching for; the results are in the table at the bottom.
+
+1. **Place on a slope.** *As expected.* Level 0 flattens its own footprint because it asks to;
+   level +1 emits no terrain alignment at all and its edges set
+   `alignTerrain = false`, so the deck sits at exactly +12 above the
+   construction's origin whatever the ground does (`NOTES.md`, "Terrain:
+   nothing to disable, just stop asking").
+   The thing to look at is the **supports**, and this is newly interesting: a
+   support is drawn from z = 0 to z = 12 *in construction space*, so it does
+   not follow terrain, and it is now 40 m long instead of 7.8 m - eight times
+   the ground to disagree with. Expect a support to float where the ground
+   falls away and to be buried where it rises. Record how bad it is on a gentle
+   slope versus a steep one; "unusable on anything but flat" is a limitation
+   worth writing down, and "a support sinks into the hill" is cosmetic.
+2. **Place two of them adjacent**, then overlapping in plan if the game lets
+   you. *As expected.* Two things are being tested and only the first is about geometry: the
+   concourse is now **40 m of seeded geometry** checked against the world, so
+   two stations side by side collide sooner than they used to (T5a's mechanism,
+   with a station instead of a road). The second is that each station is its own
+   **StationGroup** with its own name, and two groups 50 m apart is exactly the
+   configuration where the engine's own catchment sharing gets interesting.
+   Neither is expected to break; both are unobserved.
+3. **Place one in 1930 and one later.** *Resolved by making 1930 the earliest.*
+   The station used to be available from 1900 while the track it seeds -
+   `track/standard/standard` - does not exist until 1930 (round sixteen's
+   table), so an 1900 station came with a track type from the future.
+   `availability.yearFrom` is now 1930 for exactly that reason, which makes the
+   case moot rather than passed. What is left is cosmetic and certain: the menu
+   icon is a hardcoded `station_era_c.tga`, so a 1930 station advertises itself
+   with era-c art.
+4. **Bulldoze one with lines running through both levels.** *No crash,
+   2026-10-22 - the game warns the line is no longer connected and rebuilding
+   the platform reconnects it.* The most dangerous test in the file, and the only one that can take the game down rather than
+   produce a bad result: the construction holds two `station` records, three
+   subconstructions, and a **hand-built `PERSON` lane** between the levels, and
+   a person lane sharing a node with a vehicle lane is the
+   `TransportNetworkSystem.cpp:116` assertion failure (root `NOTES.md`). If the
+   game dies here, that is what happened and `vehicleNodeKeys` missed a case.
+   Do it with a bus and a train both **mid-journey**, which is the state the
+   engine has least reason to handle gracefully.
+5. **Build a road through the structure at grade.** *As expected, and a second
+   concourse can be placed on the far side of the new road - the per-entrance
+   slot derivation paying for itself.* A gap is a whole 40 m tile now, so leave one deliberately rather than expecting to thread between
+   7.8 m piers. Two outcomes are both informative: a road **refused** where
+   nothing of ours stands means our geometry claims more than it draws, and a
+   road accepted straight **through** a support means the block is not
+   colliding at all - which is the collider-less behaviour the open question
+   asks about, arriving by accident.
+6. **Draw a track from the elevated level down to ground.** *As expected.* Expect an
+   embankment; it is accepted (`NOTES.md`, "The player's connecting edge
+   earthworks"). Two observables now rather than one: whether it **buries the
+   lower level**, which is the condition set for revisiting the decision, and
+   how far along the connecting tile it reaches - that reach is what refuses a
+   support under the tile the track leaves from, which is the accepted
+   limitation of 2026-10-22.
+7. **Place against a curved road.** *As expected.* New, and it follows from the widening: the
+   entrance snaps by its own snapPoint, and the concourse is a 40 m straight
+   block at the frontage. On a curve the two cannot both be flush, so either
+   the station refuses to place or the concourse's ends cut into the road's
+   verge. Worth knowing which, because a straight road is the only thing any
+   session has placed against.
 
 
 ## Results
@@ -462,13 +546,13 @@ Quick, and each one is a thing a player will do in the first hour.
 | T2 edit elevated level, **re-check after the deletion bug** | pass 2026-10-12 | add and delete platforms and tracks, then re-add and delete again. Regressed twice in one day and both causes were elsewhere: a seeded concourse, whose slot is derived from the street entrance, and then the zeroed rail slot reservations added while chasing it - a track module's only model is invisible and collider-less, so the slot rectangle is the only thing the cursor can find it by. See `NOTES.md`, "Round seven" |
 | T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
 | T4 upgrade tools *(new)* | **pass 2026-10-22** | steps 1-3 and 5-6 on 10-21: the catenary goes on, an **electric locomotive runs**, and it comes off again; removing it raises the game's own "line is incomplete" notice, which clears when it goes back on - correct behaviour, not a fault. Two earlier failures, same symptom both times: 10-09 `isAffectedByToolFn` would not resolve on the tool thread; 10-12 `upgradeFn` declined on a gate reading `entry.metadata`. Step 4 closed 10-22: dragging track from the Tracks menu **collides, as it should** - that is the builder, not an upgrade path. The two real routes both work, the upgrade tool and replacing the module. Separately parked: the upgrade tool lists no high-speed variant. Round seventeen |
-| T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
-| T5 supports | place pass, **delete to re-confirm** | seven solid blocks, filling their cells, lining up with each other. A support **deleted** on 2026-10-22 with neighbours either side, which retires round three: the collider overhang was never what the bulldozer objected to. **But that was the engine's placeholder**, because `support_block.mdl` had been discarded at load since the day it was written (log audit, same day) - so the one click is worth repeating now that the real block loads, whose collider is its mesh and whose rectangle is zeroed by the trim. One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
+| T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | snapping the station to an existing road works with the concourse seeded at its full 40 m width, re-confirmed after the widening. seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
+| T5 supports | **place and delete pass 2026-10-22** | solid blocks, filling their cells, lining up with each other. A support **deletes** with neighbours either side - confirmed twice: first against the engine's placeholder, then again with the real `support_block.mdl` loading, whose collider is its mesh and whose slot rectangle is zeroed by the trim. That is round three's feared configuration exactly, and it deletes. One cell inside a bus platform's rectangle is now offered with a shortened click target rather than withheld | One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
 | T5b passengers reach the upper platform *(new)* | **pass 2026-10-22** | run as the no-catchment interchange test: empty catchment, bus one end, train the other, so throughput is the proof. Transfers **both ways**. They **teleport** rather than walk, which a stock island platform with no underpass does too - so this says the station works and says nothing about `linkLevels` |
 | T6 pedestrian link *(new)* | **steps 1-4 pass 2026-10-22**, step 5 open | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 passed as the T5b interchange test, in both directions, so the levels are not isolated and the blocker is closed. Step 5 - whether the link is what carries it - is the open one, and the teleport says probably not |
 | T7 save / reload / rebuild | **steps 1-2 pass 2026-10-22**, step 4 to re-run | saved, loaded, and the station is fully functional - both lines still run. Module editing after the reload (placing supports, which is what turned up the support sizing) exercised the rebuild path too, so step 3 is covered in substance. **Step 4 wants re-running**: support ids changed the same day, one cell per deck tile instead of five, so no support in any existing save has been through a save with the ids it will ship with |
-| T8 mod removal | | |
-| T9 awkward cases | | |
+| T8 mod removal | **n/a - declared, not tested 2026-10-22** | the mod promises the worst grade instead of measuring one: keep it enabled while a save holds a station. The recovery path (deactivate, reactivate, reload) is still worth two minutes |
+| T9 awkward cases | **pass 2026-10-22** | all seven as expected. The two that mattered: **bulldozing with a bus and a train running through both levels did not crash** - the `TransportNetworkSystem` assertion did not fire, so `vehicleNodeKeys` holds - and the game's "line is no longer connected" notice is correct behaviour, cleared by rebuilding the platform. A **second concourse** can be placed across a road driven through the structure. Case 3 was made moot instead of passed: `yearFrom` is 1930 now, which is when the seeded track type starts to exist |
 
 
 ## Before publishing

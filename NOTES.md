@@ -33,6 +33,27 @@ that changes how a built thing behaves every frame is not.** The first kind
 bakes its decision into the savegame at build time and can declare
 `severityRemove: "None"`.
 
+**A mod that *is* the construction is a third case, and it should declare the
+worst outcome without measuring it.** `multi-layer-stations` adds a construction
+rather than seeding a stock one, so deactivating it deletes what the player
+built; how far the damage spreads beyond that - stations gone and nothing else,
+a line left needing repair, or a save that will not load - is not worth
+establishing, because it is not a property of the mod so much as of the
+*version*. The geometry, the slot ids and the module names all come from the
+mod, so a removal that is survivable this release can be fatal after any change
+to any of them, and a promise that has to be re-earned every release is worth
+less than no promise at all. Decided for that mod 2026-10-22: the listing text,
+the README and `severityRemove` all say "keep it enabled while a save contains
+one of these stations".
+
+Worth knowing before picking a value: **`"Warning"` is the loudest there is
+evidence for.** Across the base game, the DLCs and every mod on this machine,
+15 `mod.json` files use `"None"` (13) and `"Warning"` (2) and nothing else. The
+field is registered in the binary as a scripting usertype with no readable list
+of values, the tealdefs do not declare the enum, and an invalid string risks the
+mod not loading at all - a worse failure than a mild dialog. So do not invent
+`"Critical"` without running the validator over it first.
+
 How the test was run, since "removing" is ambiguous: the mod stays on disk and
 is *deactivated for the savegame*. That is the real removal path - mods are
 per-savegame, so a deactivated mod's `runFn` never runs and its modifiers are
@@ -668,6 +689,52 @@ grep the log for `were removed because`** - it names the file and every resource
 it could not resolve. The telltale in-game is a `Texture error: Could not find
 texture '::/placeholders/mat/tex/unkown_texture.dds'`, which is the placeholder
 material arriving (the misspelling is the game's).
+
+
+## A reused mesh brings its UVs, and a scaled box smears one crop of the texture
+
+**Measured 2026-10-22**, the first time `multi-layer-stations` actually drew its
+own block (the path bug above had been substituting a placeholder for ten days).
+Reported immediately: *"The textures of the concourse and the supports are all
+messed up."*
+
+A `.mdl` picks a mesh and a material independently, which is what makes reusing
+base-game meshes attractive - but the **UV layout belongs to the mesh**, and
+nothing about scaling the model changes it. `placeholders/msh/cube_1x1_lod0.msh`
+carries a `uv0` attribute whose values are u in {0, 0.25, 0.5, 0.75, 1} and v in
+{0, 0.333, 0.667, 1}: a 4 x 3 **cube-cross atlas**, authored for the one
+material the stock model pairs it with (`placeholders/mat/missing_object.mtl`,
+whose albedo is `missing_cube.dds`).
+
+So every face of that cube samples a fixed 0.25 x 0.333 corner of whatever
+texture it is given. Hand it a 2048 px masonry texture and scale the box to
+5 x 40 m and each face smears a *different* crop of the stonework over up to
+40 m. It is not a broken reference and it logs nothing; it just looks wrong.
+
+Three ways out, in increasing cost:
+
+1. **Give it a texture with no pattern to smear.** A flat material survives any
+   crop and any stretch. Uniformity is measurable offline without decoding the
+   image: a `.dds`' DXT blocks each carry two RGB565 endpoints at a fixed
+   stride, so sampling those and taking the luminance standard deviation ranks
+   candidates in a second. For the materials considered here:
+   `bridge/stone/mat` `abut_stone_alb` **15.1**, `cement_plant` 6.7,
+   `quarry`/`coal_mine` 5.2, `machine_factory` 4.9,
+   `tanks/mat/concrete_base` **4.2**. The last is the flattest concrete in the
+   base game's industry assets and lives in `base/content/assets`, so it is not
+   a DLC dependency.
+2. **Ship a material of your own.** A `.mtl` carries a `texcoord_scale`
+   fragment property - `texCoordScale = 1` in the stock materials read here - so
+   a copy with a larger scale tiles its texture instead of stretching it. It
+   needs a *seamless* texture rather than an atlas, and base textures declare
+   `wrapS`/`wrapT = "REPEAT"`, so the wrapping is already there. Untested.
+   Remember the `::/` prefix rule above: a mod's `.mtl` referencing base
+   textures has to spell them absolutely.
+3. **Ship a mesh of your own.** A `.msh` is a Lua header of byte offsets into a
+   `.msh.blob`, so one can be generated - `tools/meshfaces.py` reads them
+   already and writing one is the same format backwards. That is the only route
+   to texel density that is uniform across boxes of different sizes, since UVs
+   are per vertex and a single mesh cannot know what it will be scaled to.
 
 
 ## A model's collider is not its mesh, and it is the collider that collides

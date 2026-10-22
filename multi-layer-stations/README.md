@@ -122,6 +122,25 @@ end, beyond the piers, is solid. It is placed, though, by clicking a 2 m band at
 its right-hand pier - see the limitations below.
 
 
+## Removing the mod
+
+**Keep it enabled while a savegame contains any multi-layer station.** This mod
+*is* the station - not a setting applied to a base-game one - so deactivating it
+for a save deletes every station built with it, and the save may not load at
+all afterwards. Bulldoze the stations first if you want the mod gone.
+
+That is a deliberate promise rather than a measured result. Removal might well
+grade better than that today, but a station whose geometry, slot ids and module
+names all come from the mod can regress to "the save will not load" with any
+later version, and a promise that has to be re-earned every release is not worth
+making. `mod.json` declares `severityRemove: "Warning"`, which is the loudest
+value any shipped mod in the install uses.
+
+`pick-single-platform-side` is the opposite case and shows where the line is: it
+only *seeds* a stock construction, the decision is baked into the savegame at
+build time, and it can declare `severityRemove: "None"` (root `NOTES.md`).
+
+
 ## Accepted limitations
 
 Measured, understood, and left as they are for v0.1:
@@ -142,15 +161,18 @@ Measured, understood, and left as they are for v0.1:
   reservations cover everything inside x = +-10 of our cell. The art and the
   catchment are offset back over the entrance, so only the pip sits off-centre.
 - **A support cell that overlaps the bus station at grade is offered with a
-  shortened click target**, not refused. The stone still fills the whole cell;
+  shortened click target**, not refused. The block still fills the whole cell;
   only the rectangle the cursor finds the empty slot by is cut clear, because
   the engine will not offer a slot whose reservation touches occupied ground. A
   cell with no such cut available is not offered at all, and the build logs both
   counts. Until 2026-10-22 one cell under the bus platform was simply withheld;
   the cut recovered it.
 - **The supports and the concourse are placeholder blocks**, drawn with
-  `support_block.mdl` - a solid 1 m stone cube shipped with the mod, reusing the
-  game's own unit-cube mesh with a collider equal to it. They are deliberately
+  `support_block.mdl` - a solid 1 m concrete cube shipped with the mod, reusing
+  the game's own unit-cube mesh with a collider equal to it. Concrete rather
+  than masonry for a measured reason: that mesh's UVs are a cube-cross atlas, so
+  a patterned texture smears one crop of itself over a 40 m block, while a flat
+  one survives it (root `NOTES.md`, "A reused mesh brings its UVs"). They are deliberately
   solid and fill their cell to within 0.02 m on every side, because what is drawn
   is how a modder reads the room the real art has. The concourse is the one
   exception: its footprint is open below the deck, since the 16 m entrance road

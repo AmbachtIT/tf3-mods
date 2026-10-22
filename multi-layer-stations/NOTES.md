@@ -2633,6 +2633,69 @@ staging area and `mods\`, and the staging copy silently wins - the exact trap
 the root convention warns about. Worth clearing out, since a stale duplicate
 there is authoritative and invisible.
 
+## T9 run: everything as expected, and two things that followed from it
+
+**2026-10-22.** The last unrun section, and all seven cases came back *as
+expected* - including the two that could have gone badly. Recorded here because
+"as expected" is a result, and because two of the cases turned into changes.
+
+| case | outcome |
+| --- | --- |
+| slope | as expected |
+| two adjacent | as expected |
+| eras | led to `yearFrom = 1930`, below |
+| bulldoze with lines running | **no crash.** The game warns the line is no longer connected, and rebuilding the platform reconnects it |
+| road through the structure | as expected, and **a second concourse can be placed on the far side** |
+| track down to grade | as expected |
+| curved road | as expected |
+
+Two of those are worth more than a tick:
+
+- **No crash on bulldozing.** This was the one test in the file that could take
+  the game down rather than produce a bad result: the construction carries two
+  `station` records, three subconstructions and a hand-built `PERSON` lane, and
+  a person node coinciding with a vehicle node is the
+  `TransportNetworkSystem.cpp:116` assertion. Demolishing with a bus and a train
+  running through both levels did not fire it, so `vehicleNodeKeys` is holding.
+  The "line is no longer connected" notice is the engine behaving correctly - it
+  is the same notice the catenary test produced when the wire came off.
+- **A second concourse on the far side of a road through the structure.** Not a
+  case anyone designed for, and it works because a concourse slot is derived
+  per **entrance** rather than per station. The slot-derivation design has now
+  paid for itself twice.
+
+### Available from 1930, because that is when its own track exists
+
+Asked in the same session: *"Is it possible to only enable the station in
+1930?"* Yes, and 1930 is the honest number rather than a taste: `seedBothLevels`
+seeds `track/standard/standard`, whose own `yearFrom` is **1930** (round
+sixteen's table), while the construction advertised itself from 1900. A station
+placed in 1900 therefore came with a track type that did not exist yet, which
+T9 case 3 was written to catch.
+
+The alternative was to seed `track/simple/simple` (`yearFrom = 0`) below 1930
+and keep 1900 availability. Not taken: an elevated concrete deck is not a 1900
+structure, and one era boundary is cheaper to reason about than two seeding
+paths. Still outstanding and cosmetic: the menu icon is hardcoded
+`station_era_c.tga`, so a 1930 station advertises itself with era-c art.
+
+### The texture was the mesh's UVs, not the seam
+
+Reported with the T9 results: *"The textures of the concourse and the supports
+are all messed up. I suspect this has something to do with adjusting it to make
+the gaps less prominent."* It is not the seam - 0.1 m to 0.02 m cannot touch
+texturing - it is the **first time the real block has ever drawn**. Yesterday's
+path fix is what let it load, and the material it carried met the placeholder
+cube's 4 x 3 cube-cross UV atlas: one fixed 0.25 x 0.333 crop of a 2048 px
+masonry texture, smeared over 40 m, different on every face.
+
+The block now carries `::/tanks/mat/concrete_base.mtl`, whose albedo is the
+flattest concrete in the base game's industry assets - luminance standard
+deviation 4.2 against the stone's 15.1, measured off the DXT block endpoints
+without decoding the images. Confirmed in-game the same session: *"The texture
+is better."* The full finding, including the two more expensive routes to
+masonry, is in the root `NOTES.md` under "A reused mesh brings its UVs".
+
 ## Open questions
 
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
@@ -2742,6 +2805,11 @@ there is authoritative and invisible.
   content, and `alignToTerrain = false` sounds made for off-grade slots.
 - Does `optional = true` on an alignment entry mean "level if you can" or
   "ignore if it conflicts"? Affects whether level 0 can stay soft.
+- **Is the hardcoded `station_era_c` menu icon worth fixing?** Open, 2026-10-22,
+  cosmetic. The construction is available from 1930 and `eraFor` picks era-a
+  platform art until 1950, but the menu icon and preview are era-c literals.
+  A `.con` declares one icon, so era-correct icons would mean era-correct
+  descriptions too - which is how stock does it, with a template per era.
 - **Would a collider-less support still be deletable?** Open, 2026-10-22, and
   it is the lever for "a support will not go under a track module that carries a
   connection". It is the collider that collides, so dropping it ends the whole

@@ -30,7 +30,19 @@ local function makeConstructionTemplates()
 				fileName = "::/gui/construction/construction_desc_hud_icons.script@configureStationHudIconsFn",
 				params = { cargo = false },
 			},
-			availability = { yearFrom = 1900, yearTo = 0 },
+			-- 1930, not 1900, and the number comes from the **seeded track**.
+			--
+			-- `seedBothLevels` seeds `track/standard/standard`, whose own
+			-- `yearFrom` is 1930 (`NOTES.md`, round sixteen), so a station
+			-- placed before then came with a track type that did not exist yet.
+			-- Asked for directly, 2026-10-22: *"Is it possible to only enable
+			-- the station in 1930?"*
+			--
+			-- The alternative was to pick `track/simple/simple` below 1930 and
+			-- keep the station available from 1900. Not taken: an elevated
+			-- concrete deck is not a 1900 structure anyway, and one era boundary
+			-- is cheaper to reason about than two code paths.
+			availability = { yearFrom = 1930, yearTo = 0 },
 			description = {
 				name = _("Multi-layer Station"),
 				description = _("An elevated train platform over a bus platform at street level. Two stations in one structure: connect a road to the lower level and a track to the upper one."),
@@ -96,7 +108,7 @@ return {
 			cost = { 240000, -1 },
 		},
 	},
-	availability = { yearFrom = 1900, yearTo = 0 },
+	availability = { yearFrom = 1930, yearTo = 0 },
 	soundConfig = {
 		builderAudioRes = "::/gui/construction/sound/buildoze_construction_large.builder_audio",
 	},

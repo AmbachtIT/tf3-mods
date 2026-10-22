@@ -21,9 +21,10 @@
 -- it has exact closed boxes that are plywood piles and advertising hoardings.
 -- So this is assembled from the two halves that are right:
 --
---  * `/placeholders/msh/cube_1x1_lod0.msh`, the game's own unit cube - 8
+--  * `::/placeholders/msh/cube_1x1_lod0.msh`, the game's own unit cube - 8
 --    vertices, 12 triangles, all six faces, centred on the origin;
---  * the stone abutment's material, so the supports still read as masonry.
+--  * `::/tanks/mat/concrete_base.mtl`, a plain concrete, because of what that
+--    cube's UVs are. See below.
 --
 -- Both are `::/` paths, and that prefix is the whole difference between this
 -- file working and this file being thrown away.
@@ -44,6 +45,29 @@
 -- substitute placeholder, not this block. Same rule as `require` (root
 -- `NOTES.md`, "From a mod, `require` needs the `::/` prefix for base
 -- content"), and with the prefix nothing has to be copied into the mod.
+--
+-- **Why concrete and not the stone it started with.** The cube's `uv0` is a
+-- 4 x 3 cube-cross atlas layout - u at 0, 0.25, 0.5, 0.75, 1 and v at 0,
+-- 0.333, 0.667, 1 - so each face samples a fixed 0.25 x 0.333 corner of
+-- whatever texture is handed to it, and the model's scale does not touch the
+-- UVs. A block stretched to 5 x 40 m therefore smears that one crop over 40 m,
+-- and the six faces each smear a *different* crop. With a 2048 px masonry
+-- texture (`abut_stone_alb.dds`) the result is exactly what was reported the
+-- first time the real block ever loaded: *"The textures of the concourse and
+-- the supports are all messed up."*
+--
+-- The fix that costs nothing is a texture with no pattern to smear. Measured
+-- over the DXT block endpoints of the candidates, as luminance standard
+-- deviation: `abut_stone_alb` 15.1, `concrete_base_alb` **4.2** - the flattest
+-- concrete in the base game's industry assets, and in `base/content/assets`
+-- rather than a DLC. Stretched and cropped, flat concrete still reads as
+-- concrete.
+--
+-- If masonry is ever wanted back, the lever is a **material of our own**:
+-- `.mtl` files carry a `texcoord_scale` fragment property (`texCoordScale = 1`
+-- in this very file's source material), so a copy with a larger scale would
+-- tile a stone texture instead of smearing one crop of it. Untested, and it
+-- only works with a seamless texture rather than an atlas.
 --
 -- **The collider is the point as much as the mesh is.** It is declared as
 -- exactly the mesh, so this piece can be scaled to a cell and stand flush
@@ -71,7 +95,7 @@ return {
 			node = {
 				children = {
 					{
-						materials = { "::/infrastructure/bridge/stone/mat/stone_abut.mtl", },
+						materials = { "::/tanks/mat/concrete_base.mtl", },
 						mesh = "::/placeholders/msh/cube_1x1_lod0.msh",
 						name = "support_block",
 						transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },
