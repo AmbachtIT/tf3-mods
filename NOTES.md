@@ -626,6 +626,50 @@ Two practical consequences:
     by collider.
 
 
+## A mod's `.mdl` needs `::/` for base-game meshes and materials, or it is thrown away
+
+**Measured 2026-10-22**, from the load-time log of `multi-layer-stations`, ten
+days after the model in question was written.
+
+Stock `.mdl` files reference meshes and materials by absolute path with a bare
+leading slash - `/placeholders/msh/cube_1x1_lod0.msh` - and do it constantly:
+695 absolute mesh references and 8354 absolute material references across the
+shipped files. Copying that idiom into a mod does **not** work. For stock
+content the bare slash is the base namespace; from a mod it resolves inside the
+mod, and the importer discards the whole model at load:
+
+```
+The following 1 models were removed because they reference an invalid resource:
+ * multi_layer_stations_1::/support_block.mdl was removed because the following
+   resources were missing:
+    - multi_layer_stations_1::/infrastructure/bridge/stone/mat/stone_abut.mtl
+    - multi_layer_stations_1::/placeholders/msh/cube_1x1_lod0.msh
+```
+
+The prefix `::/` is the base namespace, exactly as it is for `require` from a
+mod (above, "From a mod, `require` needs the `::/` prefix for base content").
+
+Two things make this expensive to find, and they are the reason it is written up
+as its own section:
+
+- **It is not an error and nothing refuses to work.** A construction that asks
+  for the discarded model gets the engine's substitute placeholder, which is a
+  closed box that scales to whatever transform it is given. So the geometry has
+  the right size, the right position and the right count, and only the surface
+  is wrong. Three sessions of judging a placeholder cube's proportions passed
+  for judging the mod's own art.
+- **`api.res.modelRep.find` cannot be used as the check.** The mod calls it
+  precisely to catch this, and on every thread the module pass has ever run on
+  the call is unavailable, so the diagnostic reports "could not ask" and the
+  session carries on.
+
+The check that works is the importer's own line. **After changing any `.mdl`,
+grep the log for `were removed because`** - it names the file and every resource
+it could not resolve. The telltale in-game is a `Texture error: Could not find
+texture '::/placeholders/mat/tex/unkown_texture.dds'`, which is the placeholder
+material arriving (the misspelling is the game's).
+
+
 ## A model's collider is not its mesh, and it is the collider that collides
 
 **Measured 2026-10-12.** Every `.mdl` may declare a `collider`, and it is a

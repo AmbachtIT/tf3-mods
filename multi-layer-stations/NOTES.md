@@ -2346,6 +2346,293 @@ worth more than the anchoring work it gates.
 For v0.1 as it stands, neither answer blocks anything: the station interchanges
 both ways today, and *that* is what had to be true.
 
+## A support is a tile long now, and so is the concourse
+
+**Reported from the game 2026-10-22**, after a save, reload and rebuild that the
+station came through intact: *"The supports are pretty short. You need five of
+them to fully support a single platform module. And these five supports do not
+fully cover the length of the platform module, there still is a small gap
+between them."* And for the concourse: *"They need to be about 1 (current)
+support width wider at both ends so they also align with the length of a
+platform or track module."*
+
+Both land on the same number. A deck tile is 40 m - rail's slot pitch along the
+track, `x = -40 * coordJ` - so `DECK_TILE` is now a constant and both pieces are
+sized from it.
+
+| piece | was | is |
+| --- | --- | --- |
+| support cell under a deck tile | 5.0 x 7.8, five per tile | **5.0 x 40.0, one per tile** |
+| stone drawn in it | 4.8 x 7.6 | 4.8 x 39.8 |
+| models per tile of deck | 30 | **6** |
+| concourse | 24 x 6 | **40 x 6** |
+
+The second half of the support report could not have been fixed at the old size.
+The gaps are `SUPPORT_SEAM` either side of each cell **plus** the spare metre
+the rail slot's 39 m reservation leaves in a 40 m tile, so five cells carry five
+gaps however the seam is tuned. Sizing the cell to the **tile** rather than to
+the reservation is what closes them: one 0.2 m seam per tile boundary and
+nothing else.
+
+What it costs is granularity, and it is worth naming because it was a design
+choice and not an accident. The subdivision existed so a player could wall off
+some spans and leave others open for a road underneath; a road now needs a whole
+40 m tile left unsupported. That is the trade the report asks for.
+
+The concourse's piers end up 20 m either side of the entrance centre, 11.9 m
+clear of the 16 m road, so the clearance that `CONCOURSE_W`'s first two values
+were fighting for is no longer the binding constraint - the tile is. Its **pick
+band is untouched**, still the 2 m at x = 10 .. 12 that rounds nine to twelve
+bought, because that comes from `CONCOURSE_FLANK` and the slot's `spacing`, not
+from the cell. Nothing about clickability changes.
+
+### The new risk is the rectangle, and it needed a cut
+
+A 5 x 40 m cell is far likelier to catch something at grade than a 5 x 7.8 m one
+was, and round twelve's rule is about the **rectangle**, not the origin: the
+24 x 6 m concourse cell got no pip for three sessions while *containing* the
+clear 2 m band that eventually worked. So a tile-length support whose cell
+clipped the corner of a bus platform would never have been offered, and nothing
+would have said why - `dependOnOccupiedGround` tests the origin, which in that
+case is nowhere near the platform.
+
+`clipEmptyOurSlots` is the answer, and it is the first pass in this mod to touch
+an **empty** slot's reservation:
+
+- obstacles are occupied stock slots that are not rail's, so they are all at
+  grade. The platform 12 m overhead is deliberately not among them: a support
+  overlaps the thing above it in plan by design and is offered anyway, which is
+  the standing evidence that the engine's own check reads z.
+- the cut is `clipFootprint`'s - one axis-aligned cut, the cheapest that keeps
+  the slot's origin inside what is left, never below `RESERVATION_MIN`.
+- a cell with no such cut is left alone and counted, because a zeroed rectangle
+  is no more clickable than an overlapping one (round eight), and that slot is
+  the one `dependOnOccupiedGround` already reports.
+- **the stone is unaffected.** `supportModels` reads `supportCells`, which holds
+  the full cell; only the click target shrinks.
+
+The log line to read is
+
+    empty slots of ours cut clear of occupied ground at their own level: N;
+    buried with no cut that keeps the origin: M
+
+### This orphans supports in existing savegames
+
+A support's slot id packs the cell index: `SUPPORT_SLOT_BASE + slot.id * 10 + k`.
+A deck tile used to have `k = 1 .. 5` and now has `k = 1` only, so any support
+placed in cells 2 to 5 of a tile has no slot after this change. The engine drops
+a module with no slot, and `logOrphanModules` names them:
+
+    modules with no slot: 4 of 16; 674000103 ours/support, ...
+
+Expected, and acceptable only because nothing is published yet - the packing is
+on the list of savegame keys that freeze at the first public release
+(`TESTS.md`, "Before publishing"). The recovery is to re-place the supports,
+which now takes one click per tile instead of five.
+
+## Three snags from the tile-length sizing, and only one of them is a trade
+
+**Reported 2026-10-22**, same session, with *"the sizing is perfect"* and three
+things behind it.
+
+### The road opening followed the cell, and should not have
+
+*"The entrance for the road now is too wide. The old entrance size was
+perfect."* Correct, and it is one number doing two jobs: the piers stood on the
+**cell's** edges, so widening the cell from 24 to 40 m moved them from x = +-12
+to x = +-20 and handed the 16 m road 37.8 m of gap.
+
+`CONCOURSE_SPAN` is now its own constant at 24 m - the old `CONCOURSE_W` - and
+the piers stand on the span. The opening is 21.8 m of clear stone again, pier
+inner faces at +-10.9, identical to what was there before the widening, and
+everything between the span and the cell edge is **filled solid, full height**:
+an 8 m block at each end, the size of the supports it lines up with. That is
+what "one support width wider at both ends" has to mean once the piers stay put.
+`span == width` reproduces the old piece exactly, so the two shapes are one
+function.
+
+### The ghost was the old size because the preview is its own entry point
+
+*"It looks like the support is stretched while scaling. When hovering to place
+the cube is about the old size. The support grows to its current, correct size
+upon placement."*
+
+Nothing was being stretched, and this is worth recording as a shape of bug
+rather than as a typo: a module has **two** drawing entry points, and only one
+of them was changed.
+
+| entry point | called | reads |
+| --- | --- | --- |
+| `updateScript` -> `supportUpdateFn` | on the placed module, in the build | `supportCell`, so the slot's real cell |
+| `getModelsScript` -> `supportGetModelsFn` | on the **cursor**, before any slot | a constant, because there is no slot yet |
+
+The preview still asked for `SUPPORT_CELL_D`, which after the resize is only the
+subdivision pitch under a station building. So the cursor carried 5 x 8 m and
+the slot took 5 x 40 m. It reads as stretching because the two are the same
+block scaled differently, which is exactly what they are.
+
+The preview now shows a deck tile. A support headed for a *building* cell is
+still previewed a tile long, which is the honest cost of the call having no slot
+context - the module cannot know where it is about to go.
+
+### A support will not go under a track module that carries a connection
+
+*"I can't place a support under a track module connected to a regular (non
+station) track, because it collides."*
+
+This one is the granularity trade arriving, and at the worst possible tile. A
+7.8 m cell could be placed in the parts of a tile that were clear; a 40 m cell
+has to clear the whole tile, and the tile at the connection is the one the
+player's own edge reaches into. Two candidate mechanisms, both ours by
+measurement and neither needing a new experiment to be plausible:
+
+- the player's edge comes down as graded **earth** rather than structure (see
+  "The player's connecting edge earthworks, in both directions"), and the
+  embankment's ground is in the cell, or
+- the first span of it carries bridge geometry, which hangs **2.4 m below the
+  rail** (the vertical budget table), so the support's top courses meet it at
+  the connection end.
+
+Either way it is the world, not the construction, and no slot flag reaches it:
+`skipCollisionCheck` governs a slot against the rest of the construction (root
+`NOTES.md`). We cannot see what the player built, so there is nothing to size
+around.
+
+**Accepted for v0.1**: the tile where a track leaves the station cannot be
+supported. Two levers if it starts to matter, in the order they should be tried:
+
+1. **Half-tile cells** - two per tile, `DECK_TILE / 2`. The inner half becomes
+   supportable and the deck gains one 0.2 m seam per tile. It gives back the
+   granularity the report asked to remove, so it is a reversal, not a fix.
+2. **A support block with no collider.** It removes the whole collision class
+   at once, because it is the collider that collides. Two prices, and the first
+   is the one to test before believing in it: an occupied support's reservation
+   is clipped or zeroed by `trimReservations`, so with no collider there may be
+   nothing left for the bulldozer to find - and deletion is what round
+   seventeen has just confirmed works. The second is that roads could then be
+   drawn straight through a support.
+
+## The log audit of 2026-10-22: the stone was never ours
+
+Asked for after the sizing settled: *"There still is a tiny gap between the
+supports and also between the supports and the concourse - less than 1m but it's
+definitely there. [...] Can you check the logs for anomalies?"* Seven things in
+one session's log, in the order they matter.
+
+### 1. `support_block.mdl` was discarded at load, every session since it existed
+
+The find, and it was in the first thirty seconds of the log rather than anywhere
+near the supports:
+
+    The following 1 models were removed because they reference an invalid
+    resource: * multi_layer_stations_1::/support_block.mdl was removed because
+    the following resources were missing:
+     - multi_layer_stations_1::/infrastructure/bridge/stone/mat/stone_abut.mtl
+     - multi_layer_stations_1::/placeholders/msh/cube_1x1_lod0.msh
+
+The mesh and material were written the way stock writes them, with a bare
+leading slash, which from a mod resolves **inside the mod**. The rule and the
+fix are in the root `NOTES.md` ("A mod's `.mdl` needs `::/` for base-game meshes
+and materials"), because it is not specific to this mod.
+
+What it means for everything written here since 2026-10-13: **no session has
+ever seen this mod's own art.** Every support and every concourse was the
+engine's substitute placeholder, which is a closed box that scales to the
+transform it is handed - so sizes, positions, counts and alignment were all real
+and all the judgements about them stand. Only the surface was never ours. Round
+fourteen's "the placeholders fill their cells" is still true; it was just a
+different placeholder than the one we thought.
+
+It also puts `checkBlock` in its place. It exists to catch exactly this and it
+has never once answered: every session logs `could not ask (api.res.modelRep
+unavailable here)`. The gate is the importer's line, and the habit to keep is to
+grep for `were removed because` after touching any `.mdl`.
+
+### 2. The gap was 0.2 m, and it is 0.04 m now
+
+Two neighbours each give up `SUPPORT_SEAM`, so a tile boundary carried twice it,
+and the concourse uses the same constant - which is why the gap beside the
+concourse looked identical to the gap between supports. It was 0.1; it is 0.02,
+which is below what the camera resolves and still not zero. Zero would leave two
+colliders meeting on a shared plane at an exact 40 m pitch, where float error is
+an overlap rather than a gap.
+
+### 3. A phantom overlap warning, from the diagnostic and not the build
+
+Every rebuild with a concourse in it logged a **warning**:
+
+    1 pair(s) of reserved rectangles still overlap after trimming;
+    reserved: 20015503 street/street_terminal_entrance_exit 16.0x15.0
+    vs 820015500 ours/ml_concourse (0.0,-18.0,0.0) 40.0x6.0
+
+The concourse does not reserve 40 x 6 m. It reserves the 2 m band at x = 10 .. 12
+that rounds nine to twelve bought, and that band does not touch the entrance's
++-8. The overlap was `slotBox` substituting our **cell** for our `spacing` in
+both of its passes, including the one whose whole question is "what does the
+*engine* hold". So the substitution is now limited to the `occupies` pass, and
+the pair of a concourse and the entrance it is derived from is exempt from the
+same-level count as well - they overlap by design, and a count that can never be
+zero cannot report anything.
+
+### 4. The catchment warnings were honest
+
+36 of `a station had no catchment of its own` at 11:25:50-51, and the timeline
+settles them: every build in that window reads `concourse=0`. The player had
+loaded a save from before the concourse and placed one at 11:25:56; from that
+rebuild on, the warning never fires again and `concourse: 1 catchment circle(s)
+and +100 pool capacity on each of 2 stations` does. Exactly what the warning's
+own text says to check.
+
+### 5. The game's own catchment warning keeps going, and that is the stage order
+
+`no catchment areas generated for station` - the engine's line, not ours -
+continues after the concourse is in, 8 to 12 times per rebuild. Expected on
+inspection rather than confirmed: the two families' hooks assemble the station
+records in stage 3 and warn there, while `applyConcourse` adds the circles
+afterwards in `finish`. The functional evidence is that catchment works at all -
+passengers board and transfer - so the warning precedes our fixup rather than
+describing the end state. Worth a cheap confirmation if it ever becomes
+load-bearing: the line should disappear from a rebuild where a **stock** station
+building is placed, since then the hook finds catchment of its own.
+
+### 6. The new clip is working, and it recovered the buried cell
+
+    empty slots of ours cut clear of occupied ground at their own level: 1;
+    buried with no cut that keeps the origin: 0;
+    e.g. 674000001 5.0x40.0 -> 2.5x40.0
+    our slots the engine will not offer, because their reservation is inside an
+    occupied stock slot's: 0 of 9
+
+That second line used to read `1 of 9`, and the slot it named was the cell
+inside the bus platform's rectangle - the one the README has carried as an
+accepted limitation since round twelve. Halving its width clear of the platform
+is enough for the engine to offer it, so **the limitation is gone** and the
+README no longer claims it.
+
+### 7. Supports' own rectangles are zeroed, which puts weight on the collider
+
+    trimmed the reserved ground: 1 clipped, 4 zeroed because no single cut
+    would do, 8 untouched
+
+The four are the four placed supports: a support sits directly under the
+platform it holds, so in plan the platform covers it completely and no single
+cut can clear it. By design since round seven, and harmless - except that it
+means **the module's geometry is the only thing the bulldozer can find a support
+by**. Which is worth re-stating now, because round seventeen's "a support
+deletes" was measured against the *placeholder's* collider. With the real block
+loading for the first time, that one click is worth repeating: its collider is
+its mesh, which is precisely the configuration round three feared.
+
+### Not ours, but in the same log
+
+    Multiple (2) mods with same id found town_clustering_1, the one from
+    .../staging_area/town_clustering_1/ has been selected
+
+Two other mods, `town_clustering_1` and `mapzilla_1`, are installed in both the
+staging area and `mods\`, and the staging copy silently wins - the exact trap
+the root convention warns about. Worth clearing out, since a stale duplicate
+there is authoritative and invisible.
+
 ## Open questions
 
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
@@ -2455,6 +2742,12 @@ both ways today, and *that* is what had to be true.
   content, and `alignToTerrain = false` sounds made for off-grade slots.
 - Does `optional = true` on an alignment entry mean "level if you can" or
   "ignore if it conflicts"? Affects whether level 0 can stay soft.
+- **Would a collider-less support still be deletable?** Open, 2026-10-22, and
+  it is the lever for "a support will not go under a track module that carries a
+  connection". It is the collider that collides, so dropping it ends the whole
+  class - but an occupied support's reservation is clipped or zeroed, so the
+  collider may be the only thing the bulldozer can find. One deploy and one
+  click, and round seventeen's test is already written.
 - **Is the teleport a fallback for a missing path, or the only mechanism there
   is?** Open, 2026-10-22, and it decides whether `linkLevels` stays. The control
   is one deploy: make the link inert and repeat the no-catchment interchange

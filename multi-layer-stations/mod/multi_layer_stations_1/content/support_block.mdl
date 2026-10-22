@@ -25,9 +25,25 @@
 --    vertices, 12 triangles, all six faces, centred on the origin;
 --  * the stone abutment's material, so the supports still read as masonry.
 --
--- Absolute resource paths, which stock models use freely (695 absolute mesh
--- references and 8354 absolute material references across the shipped `.mdl`
--- files), so nothing is copied into this mod.
+-- Both are `::/` paths, and that prefix is the whole difference between this
+-- file working and this file being thrown away.
+--
+-- Stock models reference meshes and materials by absolute path freely (695
+-- absolute mesh references and 8354 absolute material references across the
+-- shipped `.mdl` files) and write them with a bare leading slash, because for
+-- stock content that *is* the base namespace. From a mod it is not: a leading
+-- `/` resolves inside the mod, and the game throws the model away at load -
+--
+--   multi_layer_stations_1::/support_block.mdl was removed because the
+--   following resources were missing:
+--    - multi_layer_stations_1::/infrastructure/bridge/stone/mat/stone_abut.mtl
+--    - multi_layer_stations_1::/placeholders/msh/cube_1x1_lod0.msh
+--
+-- which is what happened from the day this file was written until 2026-10-22.
+-- Every support and concourse any session has looked at was the engine's
+-- substitute placeholder, not this block. Same rule as `require` (root
+-- `NOTES.md`, "From a mod, `require` needs the `::/` prefix for base
+-- content"), and with the prefix nothing has to be copied into the mod.
 --
 -- **The collider is the point as much as the mesh is.** It is declared as
 -- exactly the mesh, so this piece can be scaled to a cell and stand flush
@@ -55,8 +71,8 @@ return {
 			node = {
 				children = {
 					{
-						materials = { "/infrastructure/bridge/stone/mat/stone_abut.mtl", },
-						mesh = "/placeholders/msh/cube_1x1_lod0.msh",
+						materials = { "::/infrastructure/bridge/stone/mat/stone_abut.mtl", },
+						mesh = "::/placeholders/msh/cube_1x1_lod0.msh",
 						name = "support_block",
 						transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },
 					},

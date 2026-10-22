@@ -931,10 +931,44 @@ local SUPPORT_COURSE = 2.0
 --- only applies to bridges the engine generates from edges.
 ---
 --- So the supports become modules. The slots sit under the elevated platforms,
---- subdivided along each 40 m tile so a player can wall off the spans they want
---- and leave the rest open for roads.
+--- **one per deck tile**, so a support is the same length as the platform or
+--- track module it holds up.
 --- `SUPPORT_TYPE` and `SUPPORT_SLOT_BASE` are declared at the top of the file,
 --- because the module classifier needs them.
+---
+--- It was five cells of 7.8 m per tile until 2026-10-22, so that a player could
+--- wall off some spans and leave others open for a road underneath. Reported
+--- from the game: *"The supports are pretty short. You need five of them to
+--- fully support a single platform module. And these five supports do not fully
+--- cover the length of the platform module, there still is a small gap between
+--- them."* Both halves are right, and the second is not fixable at that size:
+--- the gaps are `SUPPORT_SEAM` either side of each cell plus the metre the
+--- rail slot's own 39 m reservation leaves in a 40 m tile, so five cells carry
+--- five gaps.
+---
+--- One cell per tile, sized to the **tile** rather than to the reservation,
+--- leaves one 0.2 m seam between neighbours and nothing else. The cost is
+--- granularity: a road under the deck now needs a whole tile left unsupported
+--- rather than a 7.8 m slice, which is the trade the report asks for.
+local DECK_TILE = 40.0
+
+--- The slot types that make up the deck itself, as opposed to the things that
+--- stand on it.
+---
+--- Read in two places, which is why it is up here with the constants: these
+--- are the slots that get one tile-length support each, and a block in one of
+--- them is a gap in the deck, which is what `dropUnreservableRailSlots`'
+--- second pass refuses to build past. A block in a roof or a building slot is
+--- just that slot.
+local DECK_SLOT_TYPES = {
+	track = true,
+	passenger_platform = true,
+	cargo_platform = true,
+}
+
+--- How finely a support cell is subdivided under things that are **not** deck
+--- tiles - the station buildings, whose footprints are 11, 20 and 37 m deep.
+--- A deck tile gets `DECK_TILE` in one piece instead.
 local SUPPORT_CELL_D = 8.0
 
 --- The cell each support slot stands in, by slot id: `{width, depth}`.
@@ -1035,11 +1069,23 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 				width, depth = 0.0, 0.0
 			end
 
+			-- A deck tile gets exactly one support, the length of the tile.
+			-- `DECK_TILE` rather than `depth`, which is the slot's 39 m
+			-- reservation: sizing to the reservation would leave the spare
+			-- metre of every tile as a gap between neighbouring supports, and
+			-- a continuous support under the deck is the whole point of the
+			-- change (see `DECK_TILE`). The cell stays centred on the slot,
+			-- because a platform tile's reservation is symmetric.
+			local deckTile = DECK_SLOT_TYPES[tostring(slot.type)]
+			if deckTile and width > 0.0 and depth > 0.0 then
+				depth = DECK_TILE
+			end
+
 			-- At most 9 cells, because the slot id packs the cell index into one
 			-- decimal digit.
 			local cells = 0
 			if width > 0.0 and depth > 0.0 then
-				cells = math.max(1, math.min(9,
+				cells = deckTile and 1 or math.max(1, math.min(9,
 					math.floor(depth / SUPPORT_CELL_D + 0.5)))
 			end
 			local cellD = depth / cells
@@ -1166,7 +1212,20 @@ end
 --- held up - round three read the old piece's overhang as the reason a support
 --- could be placed and not removed, rounds four to six could still remove
 --- nothing, and round seven fixed removal by clipping the **reservations**.
-local SUPPORT_SEAM = 0.1
+---
+--- 0.1 m until 2026-10-22, when a tile-length support made the arithmetic
+--- visible: two neighbours each give up a seam, so the deck carried a 0.2 m
+--- line of daylight at every tile boundary and beside the concourse, which uses
+--- the same constant. Reported as *"a tiny gap between the supports and also
+--- between the supports and the concourse - less than 1m but it's definitely
+--- there"*, and 0.2 m is what it was.
+---
+--- 0.02 m is below anything the camera resolves and still **not zero**, which
+--- is the point: the cells tile exactly at a 40 m pitch, so a zero seam would
+--- leave two colliders meeting at a shared plane and any float error there is
+--- an overlap rather than a gap. 4 cm of air per boundary buys that away for
+--- nothing visible.
+local SUPPORT_SEAM = 0.02
 
 --- How thick a placeholder wall is: 1 m, or less in a cell too small for that.
 local function wallThickness(width, depth)
@@ -1186,6 +1245,21 @@ end
 --- `api.res.modelRep` may not be reachable from every thread the module pass
 --- runs on, so a failed *call* is reported as "unknown" rather than as a
 --- missing model - the same caution `moduleMetadata` takes.
+---
+--- **And in practice it is never reachable here.** Every session logs
+--- `could not ask (api.res.modelRep unavailable here)`, so this check has never
+--- answered the question it was written for - it did not catch the model being
+--- thrown away for a mod-relative resource path, which cost ten days of
+--- looking at the engine's placeholder and calling it our art.
+---
+--- The authoritative evidence is the **importer's own warning at load**, which
+--- names the file and the resources it could not find:
+---
+---     The following 1 models were removed because they reference an invalid
+---     resource: * multi_layer_stations_1::/support_block.mdl ...
+---
+--- So grep the log for `were removed because` after changing any `.mdl`, and
+--- treat this line as a courtesy rather than as a gate.
 local blockChecked = false
 local function checkBlock()
 	if blockChecked then return end
@@ -1333,7 +1407,7 @@ local function supportCell(result, slotId)
 			return slot.spacing[1] + slot.spacing[2], slot.spacing[3] + slot.spacing[4]
 		end
 	end
-	return 5.0, SUPPORT_CELL_D
+	return 5.0, DECK_TILE
 end
 
 --------------------------------------------------------------------------------
@@ -1360,20 +1434,49 @@ end
 --- model, and a module of ours is the only thing that can do it - it is in
 --- neither family's module map, so neither family's catchment sweep can see it.
 ---
---- 24 m wide, and the number comes from the **street template**, not from the
---- ground face.
+--- One deck tile wide: 40 m, the length of a platform or track module.
 ---
---- 20 m was the first answer, measured off the entrance module's ground face at
---- x in [-5, 5] - but that face is the 10 m carriageway, and the road is wider
---- than its carriageway. `entrance_new.street_template` declares lanes of
---- `width = 3, 5, 5, 3`: **16 m**, a 10 m carriageway with 3 m sidewalks either
---- side. So a 20 m concourse leaves its legs just 2 m clear of the road, which
---- is to say standing on the shoulder.
+--- The number has been worked out three times, from the inside out, and only
+--- the last one comes from the deck:
 ---
---- 24 m puts them at x = +-12, 4 m clear of the road edge. It costs the neat
---- match with a stock `*_20_20` building, which is a fair trade for legs that
---- are not in the road.
-local CONCOURSE_W = 24.0
+---  * **20 m**, measured off the entrance module's ground face at x in [-5, 5].
+---    That face is the 10 m carriageway, not the road: `entrance_new.street_template`
+---    declares lanes of `width = 3, 5, 5, 3` - **16 m**, a 10 m carriageway with
+---    3 m sidewalks - so 20 m left the legs 2 m clear of the road, standing on
+---    the shoulder.
+---  * **24 m**, which put them at x = +-12, 4 m clear of the road edge. Correct
+---    and still too narrow to read as part of the structure: reported from the
+---    game 2026-10-22, *"The concourse building also is a bit too narrow. They
+---    need to be about 1 (current) support width wider at both ends so they
+---    also align with the length of a platform or track module."*
+---  * **40 m**, which is that request and `DECK_TILE` at the same time - one
+---    support width was 7.8 m, and 24 + 2 * 7.8 is 39.6. Taking the tile
+---    exactly means the concourse ends where the module above it ends, and the
+---    supports either side of it line up with both.
+---
+--- The legs end up 20 m from the entrance centre, 12 m clear of the 16 m road,
+--- which is clearance to spare rather than a constraint. What the extra width
+--- does cost is **placement footprint**: the concourse is seeded, so its
+--- geometry is checked against the world (root `NOTES.md`), and this is now
+--- 40 m of it at the street frontage.
+local CONCOURSE_W = DECK_TILE
+
+--- The opening the entrance road passes through, between the piers.
+---
+--- This is `CONCOURSE_W`'s old value, and it is now its own number because
+--- widening the cell to a deck tile widened the **hole** with it - the piers
+--- stand on the cell's edges, so they went from x = +-12 to x = +-20 and the
+--- road got 16 m of gap it has no use for. Reported from the game the same day:
+--- *"The entrance for the road now is too wide. The old entrance size was
+--- perfect."*
+---
+--- So the two numbers are separated. The span is what the road needs: piers at
+--- +-12, an opening of 21.8 m between the stonework, which is the geometry that
+--- was there before. Everything between the span and the cell edge is **filled
+--- solid, full height**, so the extra width at each end reads as the support it
+--- is the size of - which is what asking for "one support width wider at both
+--- ends" means once the piers stay put.
+local CONCOURSE_SPAN = 24.0
 
 --- 6 m deep, which is **not** a styling choice - it is the largest depth that
 --- keeps the concourse out of the road.
@@ -1668,19 +1771,31 @@ end
 --- have to straddle the road 11 m away from it. `addModel` draws in the slot's
 --- frame, so every x here is measured from the origin, and passing the wrong
 --- `cx` does not shift the art a little - it stands a pier in the carriageway.
-local function concourseModels(width, depth, cx)
+local function concourseModels(width, depth, span, cx)
 	local models = {}
 	local w = math.max(width - 2.0 * SUPPORT_SEAM, 0.0)
 	local d = math.max(depth - 2.0 * SUPPORT_SEAM, 0.0)
 	local t = wallThickness(w, d)
 	local hw, hd = w * 0.5, d * 0.5
+	-- The opening, a seam inside the span for the same reason the cell is.
+	local hs = math.min(math.max(span * 0.5 - SUPPORT_SEAM, 0.0), hw)
 	local deck = math.min(CONCOURSE_DECK, PITCH * 0.5)
 	cx = cx or 0.0
 
-	-- The piers stand on the cell's x edges, run its full depth, and stop under
-	-- the deck.
-	stoneFill(models, cx - hw, cx - hw + t, -hd, hd, 0.0, PITCH - deck)
-	stoneFill(models, cx + hw - t, cx + hw, -hd, hd, 0.0, PITCH - deck)
+	-- The piers flank the **road**, not the cell: they stand on the span's
+	-- edges, run the cell's full depth, and stop under the deck.
+	stoneFill(models, cx - hs, cx - hs + math.min(t, hs), -hd, hd,
+		0.0, PITCH - deck)
+	stoneFill(models, cx + hs - math.min(t, hs), cx + hs, -hd, hd,
+		0.0, PITCH - deck)
+	-- Whatever the cell has beyond the span is solid, full height, so the ends
+	-- read as the supports they are the size of and line up with the real ones
+	-- either side. With `span == width` there is nothing here and the piece is
+	-- what it was before 2026-10-22.
+	if hw > hs then
+		stoneFill(models, cx - hw, cx - hs, -hd, hd, 0.0, PITCH - deck)
+		stoneFill(models, cx + hs, cx + hw, -hd, hd, 0.0, PITCH - deck)
+	end
 	-- The deck: the whole footprint, at the top, where it reads as a structure
 	-- crossing the road rather than a plug in it. This is the piece that shows
 	-- the envelope, so it is the one that must not be shaved.
@@ -2002,6 +2117,89 @@ local function trimReservations(result, railSlots, modules, xf)
 	return original
 end
 
+--- Cuts an **empty** slot of ours clear of occupied stock ground at its own
+--- level, so the engine will still offer it.
+---
+--- `trimReservations` deliberately leaves empty slots alone - an empty slot's
+--- rectangle is the only thing the cursor can find it by, and round eight is
+--- what taking it away costs. That was safe while a support cell was 5 x 7.8 m,
+--- because a cell that size either sat clear of everything at grade or sat
+--- wholly inside a bus platform, and the second case is what
+--- `dependOnOccupiedGround` reports.
+---
+--- A tile-length cell changes the arithmetic. 5 x 40 m under the deck will
+--- clip the corner of a bus platform or an entrance while its own origin is
+--- nowhere near either, and round twelve's rule is about the **rectangle**,
+--- not the origin: the 24 x 6 m concourse cell got no pip for three sessions
+--- while containing the clear 2 m band that eventually worked. So a support
+--- whose cell catches an occupied rectangle anywhere along its length would
+--- simply never be offered, with nothing in the log to say why - the origin
+--- test above would not see it.
+---
+--- Hence a cut rather than a refusal, and `clipFootprint` is already the right
+--- shape for it: one axis-aligned cut, the cheapest one that keeps the slot's
+--- own origin inside what is left, and never below `RESERVATION_MIN`. The
+--- support still **draws** its whole cell - `supportModels` reads
+--- `supportCells`, not `spacing` - so this shortens the click target and not
+--- the stone.
+---
+--- Same level only, which is the point: the obstacle list is occupied stock
+--- slots that are not rail's, so the platform 12 m overhead is not in it. A
+--- support under an occupied platform overlaps it in plan by design, and the
+--- engine offers it anyway - which is the evidence that its own check reads z.
+local function clipEmptyOurSlots(result, railSlots, modules)
+	local obstacles = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		local sp = slot.spacing
+		if sp ~= nil and (sp[1] + sp[2] + sp[3] + sp[4]) > 0.0
+			and (railSlots or {})[slot] == nil
+			and type(slot.id) == "number" and slot.id < OUR_SLOT_MIN
+			and (modules or {})[slot.id] ~= nil then
+			obstacles[#obstacles + 1] = slotFootprint(slot, nil)
+		end
+	end
+
+	local clipped, stuck, example = 0, 0, nil
+	if #obstacles > 0 then
+		for _i, slot in ipairs(result.slots or {}) do
+			local sp = slot.spacing
+			if type(slot.id) == "number" and slot.id >= OUR_SLOT_MIN
+				and sp ~= nil and (sp[1] + sp[2] + sp[3] + sp[4]) > 0.0
+				and (modules or {})[slot.id] == nil then
+				local b0 = slotFootprint(slot, nil)
+				local b, fouled = clipAgainstAll(b0, obstacles, false,
+					axisAligned(b0))
+				if fouled and b ~= nil then
+					local to = footprintSpacing(b)
+					slot.spacing = to
+					clipped = clipped + 1
+					if example == nil then
+						example = string.format("%d %.1fx%.1f -> %.1fx%.1f",
+							slot.id, sp[1] + sp[2], sp[3] + sp[4],
+							to[1] + to[2], to[3] + to[4])
+					end
+				elseif fouled then
+					-- No single cut keeps the origin inside, so the cell is
+					-- buried rather than clipped. Left alone on purpose: a
+					-- zeroed rectangle is not more clickable than an
+					-- overlapping one, and `dependOnOccupiedGround` is what
+					-- reports this slot.
+					stuck = stuck + 1
+				end
+			end
+		end
+	end
+
+	local line = "empty slots of ours cut clear of occupied ground at their own"
+		.. " level: " .. tostring(clipped) .. "; buried with no cut that keeps"
+		.. " the origin: " .. tostring(stuck)
+	if example ~= nil then
+		line = line .. "; e.g. " .. example
+	end
+	line = line .. ". The module still draws its whole cell."
+	log.message(LOG .. line)
+end
+
 --- **Do not offer a rail slot that could not keep a reservation.**
 ---
 --- Reported 2026-10-13, round thirteen: *"I can place platforms and tracks over
@@ -2043,16 +2241,6 @@ end
 --- Rail only. Street is stock, at grade, and was there first; our own slots are
 --- placed where we chose to put them and are reported by
 --- `dependOnOccupiedGround` instead.
---- The slot types that make up the deck itself, as opposed to the things that
---- stand on it. A block in one of these is a gap in the deck, and a gap is what
---- the second pass below refuses to build past; a block in a roof or a building
---- slot is just that slot.
-local DECK_SLOT_TYPES = {
-	track = true,
-	passenger_platform = true,
-	cargo_platform = true,
-}
-
 local function dropUnreservableRailSlots(result, railSlots, xf, modules)
 	local obstacles = {}
 	for _i, slot in ipairs(result.slots or {}) do
@@ -2246,14 +2434,24 @@ local function slotBox(slot, xf, family, original)
 	-- The geometry wants the reservation as it was *before* `trimReservations`
 	-- took it away, because the diagnostic is about what the modules occupy.
 	local sp = (original or {})[slot] or slot.spacing
-	-- Our own slots reserve nothing on purpose, so measure what they *occupy*
-	-- instead - otherwise the diagnostic goes quiet about exactly the modules it
-	-- was written for.
-	local cell = supportCells[slot.id]
-	if cell ~= nil then
-		sp = { cell[1] * 0.5, cell[1] * 0.5, cell[2] * 0.5, cell[2] * 0.5 }
-	elseif slot.id >= CONCOURSE_SLOT_BASE then
-		sp = concourseCell()
+	-- Our own slots claim less ground than they stand on, so for the
+	-- *occupies* pass - the one that is handed `original` - measure the cell
+	-- instead, or the diagnostic goes quiet about exactly the modules it was
+	-- written for.
+	--
+	-- Only that pass. The other one asks what the **engine** holds, and
+	-- substituting there reported the concourse as its whole 40 x 6 m cell
+	-- against an entrance that its real 2 m band does not touch: one phantom
+	-- `reserved` pair on every rebuild with a concourse in it, logged as a
+	-- warning, standing in front of any real overlap that might turn up
+	-- (2026-10-22).
+	if original ~= nil then
+		local cell = supportCells[slot.id]
+		if cell ~= nil then
+			sp = { cell[1] * 0.5, cell[1] * 0.5, cell[2] * 0.5, cell[2] * 0.5 }
+		elseif slot.id >= CONCOURSE_SLOT_BASE then
+			sp = concourseCell()
+		end
 	end
 	local t = xf ~= nil and transf.mul(xf, slot.transf) or slot.transf
 	-- `spacing` is `{left, right, back, front}` from the slot origin, so the
@@ -2298,6 +2496,19 @@ local function describeBox(b)
 		b.id, b.family, tostring(b.type), b.cx, b.cy, b.cz, b.hw * 2, b.hd * 2)
 end
 
+--- Is this pair a concourse and the entrance it was derived from?
+---
+--- They overlap at grade **by design** - the concourse spans that entrance's
+--- road, and its slot id is that entrance's with the variant digits cleared -
+--- so counting the pair would mean the same-level count is never zero, and a
+--- count that is never zero cannot report anything.
+local function concourseOverItsEntrance(a, b)
+	local lo, hi = a.id, b.id
+	if lo > hi then lo, hi = hi, lo end
+	return hi >= CONCOURSE_SLOT_BASE and lo < OUR_SLOT_MIN
+		and hi - CONCOURSE_SLOT_BASE == lo - (lo % 100)
+end
+
 local function logSlotOverlaps(result, railSlots, xf, modules, original)
 	local boxes, live = {}, {}
 	for _i, slot in ipairs(result.slots or {}) do
@@ -2329,7 +2540,7 @@ local function logSlotOverlaps(result, railSlots, xf, modules, original)
 	for i = 1, #boxes do
 		for j = i + 1, #boxes do
 			local a, b = boxes[i], boxes[j]
-			if boxesOverlap(a, b) then
+			if boxesOverlap(a, b) and not concourseOverItsEntrance(a, b) then
 				local dz = math.abs(a.cz - b.cz)
 				local level = dz < 1.0 and "same" or "cross"
 				if level == "same" then same = same + 1 else cross = cross + 1 end
@@ -2346,7 +2557,7 @@ local function logSlotOverlaps(result, railSlots, xf, modules, original)
 	for i = 1, #live do
 		for j = i + 1, #live do
 			local a, b = live[i], live[j]
-			if boxesOverlap(a, b) then
+			if boxesOverlap(a, b) and not concourseOverItsEntrance(a, b) then
 				reserved = reserved + 1
 				if examples.reserved == nil then
 					examples.reserved = describeBox(a) .. " vs " .. describeBox(b)
@@ -3005,8 +3216,10 @@ return {
 	---
 	--- The `support draw:` line is here because "the geometry does not coincide
 	--- with the slot" has three possible causes and they are not
-	--- distinguishable on screen: the cell read back is wrong (a fallback
-	--- `5.0x8.0` means `supportCell` did not find the slot at all), the frame
+	--- distinguishable on screen: the cell read back is wrong (a cell of
+	--- `5.0x40.0` under a station building means `supportCell` fell back
+	--- without finding the slot - under a deck tile the fallback and the real
+	--- answer are now the same number, which is only lucky), the frame
 	--- is wrong (`addModel` multiplies by `result.slots[i].transf`, so this is
 	--- the slot's own transform - if its translation is not at grade under the
 	--- platform, the slot is misplaced, not the art), or the art does not fill
@@ -3037,8 +3250,22 @@ return {
 
 	--- The placement preview.
 	supportGetModelsFn = function(captureParams, params)
-		-- No slot context during the preview, so show a platform-sized span.
-		return supportModels(5.0, SUPPORT_CELL_D)
+		-- No slot context during the preview, so show a **deck tile's** cell,
+		-- which is what nearly every support stands in.
+		--
+		-- This is its own entry point, and that is why the ghost was wrong:
+		-- reported 2026-10-22, *"It looks like the support is stretched while
+		-- scaling. When hovering to place the cube is about the old size. The
+		-- support grows to its current, correct size upon placement."* Nothing
+		-- was being stretched - the preview is drawn here and the placed module
+		-- by `supportUpdateFn`, and this one still read `SUPPORT_CELL_D`, which
+		-- is now only the subdivision pitch under a station building. The cursor
+		-- carried a 5 x 8 m block and the slot took a 5 x 40 m one.
+		--
+		-- A support under a building cell is still previewed a tile long, which
+		-- is the cost of there being no slot context on this call: the module
+		-- does not know where it is about to go.
+		return supportModels(5.0, DECK_TILE)
 	end,
 
 	--- The concourse's geometry. Placeholder art - see `concourseModels`.
@@ -3051,7 +3278,7 @@ return {
 	--- pedestrian link cannot live here either.
 	concourseUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
 		for _i, m in ipairs(concourseModels(CONCOURSE_W, CONCOURSE_D,
-				-CONCOURSE_FLANK)) do
+				CONCOURSE_SPAN, -CONCOURSE_FLANK)) do
 			addModel(m.id, m.transf, tag, result.models)
 		end
 	end,
@@ -3059,7 +3286,8 @@ return {
 	--- The placement preview, offset exactly like the real thing so that what
 	--- the cursor drags is where the concourse lands.
 	concourseGetModelsFn = function(captureParams, params)
-		return concourseModels(CONCOURSE_W, CONCOURSE_D, -CONCOURSE_FLANK)
+		return concourseModels(CONCOURSE_W, CONCOURSE_D, CONCOURSE_SPAN,
+			-CONCOURSE_FLANK)
 	end,
 
 	--- What happens to `params.modules` when the player adds or removes one
@@ -3307,6 +3535,10 @@ return {
 		-- is defined, and before the diagnostics, so their counts are over the
 		-- slots the engine is actually given.
 		dropUnreservableRailSlots(result, railSlots, RAIL_XF, params.modules)
+		-- After the rail guard and before the diagnostics, for the same reason:
+		-- a tile-length support cell has to be cut clear of the bus station at
+		-- grade or the engine will not offer it at all.
+		clipEmptyOurSlots(result, railSlots, params.modules)
 		logSlotOverlaps(result, railSlots, RAIL_XF, params.modules, reservations)
 		logOrphanModules(result, params.modules)
 		-- Last, because it depends on every slot of ours existing: it is what

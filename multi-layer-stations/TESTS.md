@@ -14,7 +14,10 @@ genuinely unknown; a fix that has been seen working is taken as working, and the
 table below records that rather than queuing it up again. Running these sections
 end to end is what happens once, when the beta is about to go out.
 
-Prerequisite: close the game and run `.\deploy.ps1 -Validate`. Expect
+Prerequisite: **grep the log for `were removed because`** if any `.mdl` has
+changed - a model with a mod-relative resource path is discarded at load and
+replaced by a placeholder that looks plausible (root `NOTES.md`). Then close the
+game and run `.\deploy.ps1 -Validate`. Expect
 `level=Info` and `Messages: none`. The validator is flaky (root `NOTES.md`,
 "Validating a mod from the command line") - if no report appears, validate
 `pick_single_platform_side_1` as a control before suspecting this mod.
@@ -245,6 +248,11 @@ is exactly where a road snapped to the station lands:
 1. **Snap the station to an existing road.** It must place. This failed before,
    while placing in free space worked, because free space has no road for the
    concourse to collide with - so *free space placing fine is not evidence*.
+   **Re-run this: the concourse went from 24 to 40 m wide on 2026-10-22**, and
+   it is seeded, so that is 16 m more geometry checked against the world at
+   placement. The depth is unchanged, which is the direction the road was in,
+   but the frontage it sweeps is now a full deck tile. Try it in a town, not
+   just against a lone road.
 2. **Connect a road, demolish the concourse, then place it again.** It must go
    back. This failed before for the same reason: re-placing re-checks against
    the road that is now there, while the seeded one survived because it
@@ -327,13 +335,37 @@ carries more weight than it did: supports are now the *only* thing that can
 hold the deck up, and track tiles get support slots where before the viaduct
 covered them.
 
+0. **Existing saves have orphaned supports.** As of 2026-10-22 a deck tile has
+   one support slot instead of five, so a support placed in cells 2 to 5 of a
+   tile no longer has a slot. Expect `modules with no slot: N` on the first
+   rebuild of an older save and expect those supports to vanish; re-place them.
+   Nothing is published yet, so the id packing is still free to change.
 1. Place supports under the platform tiles **and under the track tiles**. They
-   should line up with each other.
+   should line up with each other, and **one support should span a whole module**
+   with a 0.2 m seam to the next - not five short ones with gaps.
+   The log line to check is `support footprints: ... track 5.0x40.0 x1`.
+1b. **Place one under a tile that overlaps the bus station at grade** - a column
+   extended over the bus platforms is the case. The cell is 5 x 40 m now, so it
+   catches things a 7.8 m cell missed, and `clipEmptyOurSlots` shortens the
+   click target rather than letting the engine refuse the slot silently:
+
+       empty slots of ours cut clear of occupied ground at their own level: N;
+       buried with no cut that keeps the origin: M
+
+   A support that cannot be placed anywhere along a tile the deck occupies, with
+   `N = 0` in that line, means the cut is not firing and the rectangle is still
+   fouled.
 2. Confirm the elevated track is happy with nothing beneath it - no engine
    complaint, no terrain rising to meet it, and a train still runs. `NOTES.md`,
    "The elevated track carries no bridge", flags this as the one open question
    the change introduces: `BRIDGE` is what Phase 0 actually tested.
-3. Leave a gap and drive a road through it.
+3. Leave a gap and drive a road through it. A gap is a whole 40 m tile now.
+3b. **Try a support under the track tile the player's own track connects to.**
+   It is refused as a collision (2026-10-22) - the embankment is in the cell and
+   no slot flag reaches a world collision. Confirm it is only *that* tile: a
+   support under the next tile along, and under the platform beside it, must
+   still go in. If a connected track row refuses supports along its whole
+   length, that is a different problem and a release blocker.
 4. Place supports under a station building. Expect them to sit under one side
    and miss the other - the known Phase 7 bug. Record which building and how
    far off, since `PLAN.md` now says the per-slot-type footprint table cannot be
@@ -431,10 +463,10 @@ Quick, and each one is a thing a player will do in the first hour.
 | T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
 | T4 upgrade tools *(new)* | **pass 2026-10-22** | steps 1-3 and 5-6 on 10-21: the catenary goes on, an **electric locomotive runs**, and it comes off again; removing it raises the game's own "line is incomplete" notice, which clears when it goes back on - correct behaviour, not a fault. Two earlier failures, same symptom both times: 10-09 `isAffectedByToolFn` would not resolve on the tool thread; 10-12 `upgradeFn` declined on a gate reading `entry.metadata`. Step 4 closed 10-22: dragging track from the Tracks menu **collides, as it should** - that is the builder, not an upgrade path. The two real routes both work, the upgrade tool and replacing the module. Separately parked: the upgrade tool lists no high-speed variant. Round seventeen |
 | T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
-| T5 supports | **place and delete pass 2026-10-22** | seven solid blocks, filling their cells, lining up with each other. A support **deletes** with neighbours either side and its cell filled to within 0.1 m, which retires round three: the collider overhang was never what the bulldozer objected to, and there is no allowance left to reinstate. One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
+| T5 supports | place pass, **delete to re-confirm** | seven solid blocks, filling their cells, lining up with each other. A support **deleted** on 2026-10-22 with neighbours either side, which retires round three: the collider overhang was never what the bulldozer objected to. **But that was the engine's placeholder**, because `support_block.mdl` had been discarded at load since the day it was written (log audit, same day) - so the one click is worth repeating now that the real block loads, whose collider is its mesh and whose rectangle is zeroed by the trim. One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
 | T5b passengers reach the upper platform *(new)* | **pass 2026-10-22** | run as the no-catchment interchange test: empty catchment, bus one end, train the other, so throughput is the proof. Transfers **both ways**. They **teleport** rather than walk, which a stock island platform with no underpass does too - so this says the station works and says nothing about `linkLevels` |
 | T6 pedestrian link *(new)* | **steps 1-4 pass 2026-10-22**, step 5 open | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 passed as the T5b interchange test, in both directions, so the levels are not isolated and the blocker is closed. Step 5 - whether the link is what carries it - is the open one, and the teleport says probably not |
-| T7 save / reload / rebuild | | |
+| T7 save / reload / rebuild | **steps 1-2 pass 2026-10-22**, step 4 to re-run | saved, loaded, and the station is fully functional - both lines still run. Module editing after the reload (placing supports, which is what turned up the support sizing) exercised the rebuild path too, so step 3 is covered in substance. **Step 4 wants re-running**: support ids changed the same day, one cell per deck tile instead of five, so no support in any existing save has been through a save with the ids it will ship with |
 | T8 mod removal | | |
 | T9 awkward cases | | |
 

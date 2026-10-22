@@ -115,6 +115,12 @@ entrance below, and **one concourse** over the entrance - which is what gives
 either level a catchment of its own. No station building is seeded on either
 level; the concourse stands in for both.
 
+The concourse is **one deck tile wide**, 40 x 6 m, so it ends where the module
+above it ends and lines up with the supports either side. Its piers stand at
+x = +-12, leaving a 21.8 m opening for the 16 m entrance road; the 8 m at each
+end, beyond the piers, is solid. It is placed, though, by clicking a 2 m band at
+its right-hand pier - see the limitations below.
+
 
 ## Accepted limitations
 
@@ -135,13 +141,28 @@ Measured, understood, and left as they are for v0.1:
   reservation holds ground no occupied slot is holding, and the entrance's own
   reservations cover everything inside x = +-10 of our cell. The art and the
   catchment are offset back over the entrance, so only the pip sits off-centre.
-- **A support cell that stands inside the bus platform's own rectangle is never
-  offered.** One cell, hidden under the platform, for the same reason. The build
-  logs the count on every rebuild.
+- **A support cell that overlaps the bus station at grade is offered with a
+  shortened click target**, not refused. The stone still fills the whole cell;
+  only the rectangle the cursor finds the empty slot by is cut clear, because
+  the engine will not offer a slot whose reservation touches occupied ground. A
+  cell with no such cut available is not offered at all, and the build logs both
+  counts. Until 2026-10-22 one cell under the bus platform was simply withheld;
+  the cut recovered it.
 - **The supports and the concourse are placeholder blocks**, drawn with
   `support_block.mdl` - a solid 1 m stone cube shipped with the mod, reusing the
   game's own unit-cube mesh with a collider equal to it. They are deliberately
-  solid and fill their cell to within 0.1 m on every side, because what is drawn
+  solid and fill their cell to within 0.02 m on every side, because what is drawn
   is how a modder reads the room the real art has. The concourse is the one
   exception: its footprint is open below the deck, since the 16 m entrance road
   runs through it.
+- **A support is one deck tile long, so a road under the deck needs a whole
+  tile left clear.** One support holds one platform or track module, 40 m of it,
+  and neighbouring supports meet with a 0.2 m seam. It was five supports of
+  7.8 m per module until 2026-10-22, which allowed a narrower gap for a road but
+  could never read as continuous: each cell paid a seam, and the module's own
+  slot reserves 39 m of its 40, so five cells carried five gaps.
+- **The tile where a track leaves the station cannot be supported.** The
+  player's own connecting edge comes down as an embankment and reaches into
+  that tile, and a support now has to clear the whole 40 m of it. The engine
+  refuses the module as a collision. Leave that tile open, or build the
+  connection at the end of a tile the deck does not need held up.
