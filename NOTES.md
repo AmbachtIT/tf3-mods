@@ -1017,6 +1017,40 @@ texture '::/placeholders/mat/tex/unkown_texture.dds'`, which is the placeholder
 material arriving (the misspelling is the game's).
 
 
+### `::/` is not enough - what follows it is the *mounted* path
+
+Found 2026-10-26, four days after the prefix itself was fixed, and the symptom
+was identical: the model silently replaced by the engine's substitute, with one
+line in the log.
+
+    multi_layer_stations_1::/support_block.mdl was removed because the
+    following resources were missing:
+     - ::/tanks/mat/concrete_base.mtl
+
+A content zip mounts at **its own directory relative to `base/content`, plus its
+internal paths**. So:
+
+| zip | internal path | resource path |
+| --- | --- | --- |
+| `stations/street.zip` | `street/modular_street_station/entrance.mdl` | `/stations/street/modular_street_station/entrance.mdl` |
+| `assets/streets.zip` | `streets/street_light_eu_a.mdl` | `/assets/streets/street_light_eu_a.mdl` |
+| `assets/stations.zip` | `stations/street/bench_era_a_l_1.mdl` | `/assets/stations/street/bench_era_a_l_1.mdl` |
+| `assets/industries/tanks.zip` | `tanks/mat/concrete_base.mtl` | `/assets/industries/tanks/mat/concrete_base.mtl` |
+
+The trap is that a stock model sitting **inside** one of those zips refers to its
+neighbours *relatively* - `tanks/grain_bin_l.mdl` says `"mat/concrete_base.mtl"`
+- so a path copied out of a stock model is as likely to be relative as absolute,
+and a relative one is wrong from anywhere else. Stock's own absolute references
+are the reliable sample: grep the shipped `.mdl` files for the file you want and
+take a spelling that starts with `/assets/` or `/stations/`, not one that starts
+with its own directory.
+
+Both halves have to be right, and they fail the same way - one log line at load
+and a substitute cube that is the right size, so the geometry still looks
+plausible. Worth grepping the log for `was removed because the following
+resources were missing` after any art change, because nothing else reports it.
+
+
 ## The three menu image formats, measured
 
 **Measured 2026-10-22** off the stock files `multi-layer-stations` had been

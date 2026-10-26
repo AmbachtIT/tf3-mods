@@ -4073,8 +4073,49 @@ stone, so the result is more stone rather than a hole, and the real art is what
 resolves it.
 
 
+## Log lines that are not ours and not a problem
+
+Two of these cost a session's attention each before being traced, so they are
+written down rather than re-investigated.
+
+**`no catchment areas generated for station`, twice per rebuild.** The engine's,
+emitted by the two stock hooks immediately before our own `concourse:` line. A
+stock station gets its catchment from a station *building* module and we ship
+none, so at the moment each family finishes its station record there is indeed
+no catchment - and `applyConcourse` writes it from the concourse's metadata
+straight afterwards. The test is our own warning, *"a station had no catchment
+of its own - falling back to a default"*: if that one is absent and the
+`concourse:` line reports circles, the engine's complaint is about a moment that
+no longer exists. Harmless, and not suppressible from a mod.
+
+**`Texture error: Could not find texture ''`.** The substitute the engine draws
+for a model it threw away, so this one *was* a real symptom - see the root
+`NOTES.md` on mounted paths, and `support_block.mdl`'s own header. Four days of
+supports and concourses were the substitute and not our block. If these lines
+are in a log, grep it for `was removed because the following resources were
+missing` before believing anything about the art.
+
 ## Open questions
 
+- **Should a hall's grade link chain through its neighbours, and be capped?**
+  Open, 2026-10-26, and measured rather than imagined. On a station whose street
+  level is three modules, the only grade person nodes are around the entrance,
+  while the halls sit under deck tiles 40 to 80 m out, so the links came out
+  long and one of them redundant:
+
+      920015548 centre (-80.0,-20.0,0.3) ... grade link to (-7.1,-14.9,0.0) 73.1 m away
+      920015549 centre (-40.0,-20.0,0.3) ... grade link to (-7.1,-14.9,0.0) 33.3 m away
+      920015551 centre ( 40.0,-20.0,0.3) ... grade link to (11.2,-10.0,0.3) 30.4 m away
+
+  Tiles -2 and -1 are adjacent, so their frontage lanes already join at the
+  shared cell edge, and `920015548` could have reached the station through
+  `920015549` instead of drawing its own 73 m diagonal across open ground. It
+  works - this is a walk nobody minds in the log and might mind on screen - so
+  the fix is a preference and a cap: take a neighbouring hall's footway node
+  when there is one, and draw nothing when the nearest station node is further
+  than some distance, leaving the kerb spur to do the connecting. The risk of
+  the cap is a hall with neither a neighbour nor a road, which would be an
+  island, so whatever number it is has to be generous.
 - **Does a hall on a slope sit on the ground?** Open, 2026-10-26, and it is not
   new with the footway - it is the oldest unasked question about this mod's
   placeholder blocks. The construction anchors terrain with a 20 cm `LESS`
@@ -4094,12 +4135,15 @@ resolves it.
   first run.** `0 of 72` of our slots filtered, a pip on every hall cell, and
   the building places. The inference that a cell out on the frontage has no
   stock rectangle to overlap was right.
-- **Will the engine place a solid building beside a road?** Open, 2026-10-26.
-  The module collision check is height-blind and runs after our hook, which is
-  what makes the cargo station building unplaceable, and a hall along a frontage
-  the player has already built a road down is the same shape of problem. If it
-  refuses, the fix is a cell that stops short of the kerb rather than anything
-  structural.
+- ~~Will the engine place a solid building beside a road?~~ **Yes - answered
+  2026-10-26, against the prediction.** A hall deletes and places again with a
+  road right against its kerb, and so does the arch with the entrance road
+  running through it, which is also a regression check on `CONCOURSE_D`: the
+  symptom that drove the cell from 10 m to 6 was a concourse that could not be
+  re-placed once a road was connected. The reason the height-blind collision
+  check does not bite is most likely that `skipCollisionCheck` is set on our own
+  slot types, where the cargo station building's refusal is a stock module's -
+  worth confirming if it ever matters, and not worth a session now.
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
   2026-10-13.** The probe slot took the module and the real one never did, with
   nothing else differing between them. See "Round nine"; the fix is

@@ -41,6 +41,31 @@
 --    - multi_layer_stations_1::/placeholders/msh/cube_1x1_lod0.msh
 --
 -- which is what happened from the day this file was written until 2026-10-22.
+--
+-- **And then it happened again, for four more days, over one path segment.**
+-- Read out of the log 2026-10-26, on a session that was testing something else:
+--
+--   multi_layer_stations_1::/support_block.mdl was removed because the
+--   following resources were missing:
+--    - ::/tanks/mat/concrete_base.mtl
+--
+-- The mesh resolved and the material did not, because `::/` is not enough on
+-- its own: what follows it has to be the resource's **mounted** path, and a
+-- content zip mounts at its own directory plus its internal paths. The
+-- concrete lives in `base/content/assets/industries/tanks.zip` with internal
+-- paths beginning `tanks/`, so its mounted path is
+-- `assets/industries/tanks/mat/concrete_base.mtl` - and `tanks/mat/...` is how
+-- the *stock* model next to it refers to it, relatively, which is where the
+-- wrong path was copied from. Checked the same way as any other: stock's own
+-- absolute references spell it out, `::/assets/streets/street_light_eu_a.mdl`
+-- for `assets/streets.zip` + `streets/street_light_eu_a.mdl`.
+--
+-- The stone version did load, which is why the smeared-texture round happened
+-- at all: `::/infrastructure/bridge/stone/mat/stone_abut.mtl` is already a
+-- mounted path. Every support and every concourse seen between 2026-10-22 and
+-- now has been the engine's substitute again - which is also where the log's
+-- `Texture error: Could not find texture ''` lines come from, and it means the
+-- concrete this file argues for has **never been seen**.
 -- Every support and concourse any session has looked at was the engine's
 -- substitute placeholder, not this block. Same rule as `require` (root
 -- `NOTES.md`, "From a mod, `require` needs the `::/` prefix for base
@@ -95,7 +120,7 @@ return {
 			node = {
 				children = {
 					{
-						materials = { "::/tanks/mat/concrete_base.mtl", },
+						materials = { "::/assets/industries/tanks/mat/concrete_base.mtl", },
 						mesh = "::/placeholders/msh/cube_1x1_lod0.msh",
 						name = "support_block",
 						transf = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, },

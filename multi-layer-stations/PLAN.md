@@ -99,14 +99,20 @@ this back to the drawing board - **a hall slot takes a pip**, `0 of 72` of our
 slots filtered, and the building places and reads right - and four interchange
 lanes coexisted without the duplicate-edge crash.
 
-The footway that run asked for is in and working, and it now has a walkway under
-it; `TESTS.md` T10 step 7 says what to re-check, which is whether any hill
-survives having a real kerb to climb.
-What is left of this item is ordinary verification - T10 steps 4, 5, 8, 9, 10
-and 11 - and one thing that is older than the hall: a solid 40 m block and a
-footway at grade are both right on the flat and unproven on a slope, because
-this construction anchors terrain and never flattens it. That is an open
-question in `NOTES.md` rather than a release blocker.
+The footway that run asked for is in and working, with a walkway under it, and
+the rise the engine's own path makes to reach a set-back road was judged
+*"manageable, especially for this alpha release"*.
+
+T10 is now nine steps of eleven, including the three that could have stopped
+the release: a hall slot takes a pip, four interchange lanes coexist, and a
+hall - or the arch, with the entrance road through it - deletes and places
+again with a road against its kerb. Two gaps are left and neither is a
+blocker: **step 11**, shortening the deck under a hall, which is the orphan
+path a player takes by accident and has nothing behind it at all; and **step
+4**'s missing configuration, a hall with neighbours on both sides, which needs
+four deck tiles to one side of the entrance where the test station had two.
+Older than the hall and still open: this construction anchors terrain and never
+flattens it, so a 40 m block is right on the flat and unproven on a slope.
 
 ### 1. The probe is out - done 2026-10-23
 

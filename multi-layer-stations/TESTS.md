@@ -597,10 +597,46 @@ first in every case: the build line carries `arch=` and `hall=` module counts
 and `N arch slots, M hall slots`, and there is a `concourse hall slots 40x6:`
 line per rebuild with one entry per entrance.
 
+### How to run what is left, in one sitting
+
+Steps 1, 2 and 3 are done and 6 and 7 are half done, so the rest is seven
+checks. The order below is the one that needs the fewest stations, because each
+stage either builds on the last one's configuration or destroys it: teardown
+comes last, deliberately.
+
+The log is overwritten every time the game starts
+(`...\local\crash_dump\stdout.txt`, prefix `[multi-layer]`), and every edit to
+the station writes a fresh batch of lines, so work down the file by timestamp
+and copy it aside before quitting if a run matters.
+
+- **A. Build the row and read it** - one arch, three halls, no lines, no roads.
+  Covers the rest of step 5 and the first half of step 7. On the first launch
+  after 2026-10-26, look at the **stone**: `support_block.mdl` had a material
+  path that did not resolve, so everything drawn since 2026-10-22 was the
+  engine's substitute cube, and this is the first run that shows our own block.
+  Grep the log for `was removed because the following resources were missing` -
+  it should find nothing - and then look at whether the concrete smears, which
+  is the thing that drove the choice of a flat texture and has never been seen.
+- **B. The road, the kerb and the terrain** - build a road along the frontage
+  past a placed hall. Second half of step 7, and the thing this round changed.
+- **C. Save, reload, edit** - step 10, while the row is intact.
+- **D. Two entrances on one frontage** - step 9.
+- **E. Place against a road** - step 8, which needs a cell with a road already
+  past it and no hall in it.
+- **F. Teardown** - step 4, deleting a hall with neighbours either side, then
+  step 11, shortening the deck under one.
+- **G. Passengers** - the two observations that need working lines: the second
+  half of step 6, and the kerb step at the end of step 7.
+
+
 1. **Is the row there, and is it the right length?** *Pass 2026-10-26.* Place a
    station and read the hall line without clicking anything. Expect one entry,
-   `820015500 tiles -1..+2: 3 offered, 1 withheld` - the range the four seeded
-   tiles project onto, three cells offered, tile 0 withheld as the arch's. A
+   `20015500 tiles -1..+2: 3 offered, 1 withheld` - the range the four seeded
+   tiles project onto, three cells offered, tile 0 withheld as the arch's. The
+   id is the **entrance's**, cleared of its variant digits, where the arch line
+   above it carries the arch slot's own `820015500`: one row per entrance is
+   what that line reports, and the halls in it are `920015549`, `920015551` and
+   `920015552`. A
    `0 offered` or a `no deck, so no row` entry means the projection is wrong,
    and the deck tile centres are the thing to print next.
 2. **Is a hall slot clickable?** *Pass 2026-10-26, first run.* The question the
@@ -620,12 +656,19 @@ line per rebuild with one entry per entrance.
    (`SUPPORT_SEAM` is 2 cm a side), and stand the same height as it. A hall
    drawn 11 m off its cell would be `CONCOURSE_CELL_OFFSET` being applied where
    it should not be - the arch's offset is the arch's alone.
-4. **Does it delete?** With neighbours either side, which is round three's
-   feared configuration and the one that has cost this mod the most time. An
-   occupied hall's reservation is clipped or zeroed by `trimReservations` like
-   everything else of ours, so what the cursor has to find it by is its own
-   collider. Expect it to work for exactly the reason a support does, and check
-   the `trimmed the reserved ground` line for a `zeroed` count if it does not.
+4. **Does it delete?** *Pass 2026-10-26 for three configurations out of four.*
+   An occupied hall's reservation is clipped or zeroed by `trimReservations`
+   like everything else of ours, so what the cursor has to find it by is its own
+   collider; check the `trimmed the reserved ground` line for a `zeroed` count
+   if one ever will not go. Deleted **and put back** in the same session: a hall
+   with no neighbour, a hall at the end of an adjacent pair (`920015548`, the
+   `module remove ... family=ours via=plain modules=14->13` line), and the arch
+   itself with the entrance road running through it.
+   What is **not** exercised is a hall with neighbours on **both** sides, which
+   is round three's feared configuration and the one that has cost this mod the
+   most time. It needs three halls in a row and so a deck of four tiles to one
+   side of the entrance: the 2026-10-26 station had tiles -2, -1 and +1, where
+   tile 0 is the arch's, so two adjacent is the longest run it can hold.
 5. **The catchment, the capacity and the store.** Each hall is worth the same as
    the arch, so with one arch and three halls expect `concourse: 4 catchment
    circle(s) and +400 pool capacity on each of 2 stations` and a
@@ -678,27 +721,34 @@ line per rebuild with one entry per entrance.
      therefore a join, and the stone meets with `SUPPORT_SEAM` between;
    - and the **placement preview** carries the walkway too, since both come out
      of `concourseModels`.
-8. **A road along the frontage.** Build a road past the station where a hall
-   cell is, then try to place the hall. The engine's module collision check is
-   height-blind and runs after our hook - the same mechanism that makes the
-   cargo station building unplaceable - so a refusal here is expected rather
-   than surprising, and what matters is that it is a refusal and not a crash.
-   If it refuses, the answer is a shallower cell, which is a number and not a
-   redesign. Note that this now pulls against step 7: the footway wants a road
-   close to the cell's face, and this step is about how close the engine will
-   let one be.
-9. **Two entrances on one frontage.** Add a second entrance 40 or 80 m along the
-   same side. The cell under that entrance must not be offered as a hall - it
-   would wall its road off - and no two hall slots may land at one position. The
-   log says both: the second entrance gets its own entry on the hall line, and
-   the `withheld` count is where the refusals show up. The 2026-10-26 run had
-   two entrances on **opposite** sides, which exercises neither rule.
-10. **Save, reload, rebuild.** Halls are new savegame keys in a new id band, so
-    this is T7 again for one module: save with three halls placed, reload, and
-    then *edit* - the geometry comes back from the save, and only a rebuild
-    re-runs `updateFn`. A hall that comes back in the wrong cell means the id
-    packing disagrees with itself across a save.
-11. **Shorten the deck.** Remove the outermost platform tile and watch what
+8. **A road along the frontage.** *Pass 2026-10-26, and the prediction was
+   wrong.* A refusal was expected - the engine's module collision check is
+   height-blind and runs after our hook, which is the mechanism that makes the
+   cargo station building unplaceable - and instead a hall deletes and places
+   again with a road right against its kerb, as does the arch with the entrance
+   road running through it. The likely reason is that `skipCollisionCheck` is
+   set on our own slot types and the cargo building's problem is a stock
+   module's, but that is an explanation to confirm if it ever matters rather
+   than a measurement.
+   The arch half of that is a **regression check worth keeping**: `CONCOURSE_D`
+   is 6 m because a 10 m cell reached the road's snap point, and the symptom was
+   that once a road was connected the concourse could not be re-placed after
+   being demolished. It can.
+9. **Two entrances on one frontage.** *Pass 2026-10-26.* A second entrance 40
+   or 80 m along the same side: the cell under it must not be offered as a hall,
+   since a hall would wall its road off, and no two hall slots may land at one
+   position. The log says both - the second entrance gets its own entry on the
+   hall line, and the `withheld` count is where the refusals show up.
+10. **Save, reload, rebuild.** *Pass 2026-10-26.* Halls are new savegame keys in
+    a new id band, so this was T7 again for one module: saved with halls placed,
+    reloaded, and then *edited*, since the geometry comes back from the save and
+    only a rebuild re-runs `updateFn`. They came back in their own cells with
+    their own ids - `920015548`, `920015549`, `920015551` - and
+    `modules with no slot: 0` on every rebuild of the session.
+11. **Shorten the deck.** *Unrun - the one check with nothing behind it.* The
+    2026-10-26 session never touched a platform tile (`rail=8` on every build
+    line), and this is the path a player takes by accident rather than on
+    purpose. Remove the outermost platform tile and watch what
     happens to the hall under it. Expected: its slot is gone, the engine drops
     the module with its own "N modules will be removed" notice, and the log
     carries `concourse hall module(s) have no slot any more`. A module dropped
@@ -725,7 +775,7 @@ line per rebuild with one entry per entrance.
 | T7 save / reload / rebuild | **steps 1-2 pass 2026-10-22**, step 4 to re-run | saved, loaded, and the station is fully functional - both lines still run. Module editing after the reload (placing supports, which is what turned up the support sizing) exercised the rebuild path too, so step 3 is covered in substance. **Step 4 wants re-running**: support ids changed the same day, one cell per deck tile instead of five, so no support in any existing save has been through a save with the ids it will ship with |
 | T8 mod removal | **n/a - declared, not tested 2026-10-22** | the mod promises the worst grade instead of measuring one: keep it enabled while a save holds a station. The recovery path (deactivate, reactivate, reload) is still worth two minutes |
 | T9 awkward cases | **pass 2026-10-22** | all seven as expected. The two that mattered: **bulldozing with a bus and a train running through both levels did not crash** - the `TransportNetworkSystem` assertion did not fire, so `vehicleNodeKeys` holds - and the game's "line is no longer connected" notice is correct behaviour, cleared by rebuilding the platform. A **second concourse** can be placed across a road driven through the structure. Case 3 was made moot instead of passed: `yearFrom` is 1930 now, which is when the seeded track type starts to exist |
-| T10 concourse hall *(new)* | **part-run 2026-10-26**: steps 1-3 and 7 pass, 6 drew four lanes without crashing | the question the module rested on is answered - a hall slot takes a pip and the building fills its cell, with 0 of our 72 slots filtered. The footway of step 7 came out of that run and works - `linkable` is honoured even after the hooks - but its kerb height needs geometry under it, which is what the walkway in the mesh is, and whether that settles the terrain is unrun. Step 9 is untouched by it, because the run's two entrances were on opposite sides |
+| T10 concourse hall *(new)* | **pass 2026-10-26** on nine of eleven steps; step 11 unrun, step 4 missing one configuration | the question the module rested on is answered - a hall slot takes a pip and the building fills its cell, with 0 of our 72 slots filtered. The footway of step 7 came out of that run and works - `linkable` is honoured even after the hooks - once its kerb height had geometry under it; the rise the engine's own path makes to reach a set-back road is *"manageable, especially for this alpha release"*. Two gaps left: shortening the deck under a hall (step 11), and deleting a hall with neighbours on both sides (step 4), which needs a longer deck to one side than this station has. Step 9 is untouched by it, because the run's two entrances were on opposite sides |
 
 
 ## Before publishing
