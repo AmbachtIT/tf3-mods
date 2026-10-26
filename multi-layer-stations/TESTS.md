@@ -300,8 +300,8 @@ Then the functional part:
    `2 catchment circle(s)` and double the pool capacity.
 9. Check the catchment does not double-count: the numbers in the log should be
    exactly `circles x radius` from concourses only. Stock station buildings are
-   counted by their own family's hook, and `applyConcourse` filters to
-   `ml_concourse` slots precisely so they are not added twice.
+   counted by their own family's hook, and `applyConcourse` filters to our own
+   two concourse slot types precisely so they are not added twice.
 10. Swap the entrance for an exit module, or vice versa. The concourse should
    **stay put** - its slot id drops the entrance's variant digits for exactly
    this reason.
@@ -420,6 +420,14 @@ covered them.
        existing person lane(s) already cross between the levels: N edge(s)
 
    which says stock already joins them. Either answer gates Phase 10 step 2.
+
+   **Answered 2026-10-23: the link is load-bearing and stays.** Passengers were
+   watched walking up through the concourse and crossing by the rail station's
+   own passenger crossings. The replacement line reports `142 street (z
+   0.0..0.3), 2208 rail (z 5.0..13.1); 0 node(s) shared between the levels` -
+   with both families filed correctly, so stock joins the levels nowhere and our
+   lane is the only route. `vehicleNodeKeys` stays too: its refusal fired 11
+   times in that session.
 
 The thing this test cannot be allowed to produce is the assertion failure in
 `TransportNetworkSystem.cpp:116`. If the game dies on placing or editing the
@@ -563,6 +571,140 @@ what each case was watching for; the results are in the table at the bottom.
    session has placed against.
 
 
+## T10 - the concourse hall
+
+Written 2026-10-26 with the module, and **part-run the same day**. From the
+game: *"I could place the concourse with arch and the new one. The volumes look
+right."* So steps 1 to 3 pass - the row is offered, a hall slot is clickable,
+and the building fills its cell - and the question the module rested on is
+answered. Step 6 drew four lanes without crashing.
+
+The same run found what step 7 is now for, and the module has been changed for
+it: *"there are no pedestrian connections from the new concourse to the road
+next to it."*
+
+The run was not on the default station, which is worth knowing when reading its
+log back: six deck tiles and **two entrances on opposite sides**, at y = -18 and
+y = +38. Each entrance got its own row - `20015500 tiles -3..+2: 5 offered, 1
+withheld` and `20215500 tiles -2..+3: 5 offered, 1 withheld` - with one cell
+withheld each, which is each entrance's own tile 0. The near-another-entrance
+rule therefore never fired, and step 8 still needs two entrances on **one**
+frontage.
+
+Everything below is on the default seeded station - four deck tiles, one
+entrance at construction x = 0 - unless a step says otherwise. Read the log
+first in every case: the build line carries `arch=` and `hall=` module counts
+and `N arch slots, M hall slots`, and there is a `concourse hall slots 40x6:`
+line per rebuild with one entry per entrance.
+
+1. **Is the row there, and is it the right length?** *Pass 2026-10-26.* Place a
+   station and read the hall line without clicking anything. Expect one entry,
+   `820015500 tiles -1..+2: 3 offered, 1 withheld` - the range the four seeded
+   tiles project onto, three cells offered, tile 0 withheld as the arch's. A
+   `0 offered` or a `no deck, so no row` entry means the projection is wrong,
+   and the deck tile centres are the thing to print next.
+2. **Is a hall slot clickable?** *Pass 2026-10-26, first run.* The question the
+   whole module rested on, and the one the arch failed four sessions running.
+   Open the module menu, pick *Concourse - Hall*, and hover along the frontage
+   either side of the arch. A pip on each of the three cells is the pass. **A
+   hall line in the log with no pip in the game is the arch's old failure** -
+   the engine filtering a reservation that overlaps a stock rectangle - and the
+   next thing to measure is which occupied rectangle the cell overlaps, from the
+   `our slots the engine will not offer` and `empty slots of ours cut clear`
+   lines. It did not happen: 72 of our slots offered, 0 filtered. The
+   inference that a cell out on the frontage has no stock rectangle to overlap
+   was right.
+3. **Does it place, and is it in the right place?** *Pass 2026-10-26* - *"the
+   volumes look right"*, with halls at tiles -1 and +1 either side of the arch.
+   It should fill its cell solid, meet the arch with no gap worth seeing
+   (`SUPPORT_SEAM` is 2 cm a side), and stand the same height as it. A hall
+   drawn 11 m off its cell would be `CONCOURSE_CELL_OFFSET` being applied where
+   it should not be - the arch's offset is the arch's alone.
+4. **Does it delete?** With neighbours either side, which is round three's
+   feared configuration and the one that has cost this mod the most time. An
+   occupied hall's reservation is clipped or zeroed by `trimReservations` like
+   everything else of ours, so what the cursor has to find it by is its own
+   collider. Expect it to work for exactly the reason a support does, and check
+   the `trimmed the reserved ground` line for a `zeroed` count if it does not.
+5. **The catchment, the capacity and the store.** Each hall is worth the same as
+   the arch, so with one arch and three halls expect `concourse: 4 catchment
+   circle(s) and +400 pool capacity on each of 2 stations` and a
+   `concourse goods store: 400 of UNIVERSAL storage`. Four circles 40 m apart
+   along the frontage, not four on top of each other: that is what reading the
+   position off the cell centre is for. The 2026-10-26 run had two arches and
+   two halls and read exactly that, so the arithmetic is confirmed; what is not
+   is the **spacing** of the circles on screen.
+6. **One lane per concourse.** *No crash 2026-10-26, four lanes drawn.* The
+   `linked levels:` line should report one lane per concourse with distinct
+   street ends, each near its own building, and no
+   `skipped ... an existing person lane already joins` count that matches the
+   number of lanes - that would mean the anchors are all picking the same pair.
+   It read four lanes, four distinct ends, 13.1 / 13.1 / 12.8 / 12.8 m of climb.
+   Then watch a passenger: with a bus at one end of the frontage and a train at
+   the other, somebody should climb the **nearest** hall rather than walking the
+   length of the station to the arch. That half is still unwatched.
+   **This is the step that could have crashed the game.** A second edge between
+   two nodes is `Duplicate edge error` at `TransportNetworkSystem.cpp:299`,
+   which killed a session on 2026-10-22; the guard is `joined`, written back
+   after every lane. Four coexisting lanes say the guard holds.
+7. **The footway, and the road next to it.** *Pass 2026-10-26* - *"the
+   pedestrian paths are now there and are fully functional"*, on a station with
+   four halls: `4 hall(s), 12 lane list(s), 0 curve(s) refused`, and
+   `linked levels:` reading each hall's own cell centre as its street end. That
+   settles the design question too: a `linkable` lane list added after the hooks
+   is linked by the engine.
+   The same run found the one thing to **re-check**: the footway was 30 cm up to
+   match the perron, and *"they do spawn little hills in the terrain the
+   pedestrians have to climb"* - the generated connection is a path edge and it
+   pulls terrain up to its ends. The height is still 30 cm, because that is the
+   street kerb every stock footway sits on, but the hall's mesh now carries a
+   2 m walkway that tall along its road-facing face for the lane to ride on. So:
+   - **the hall now reads as a building with a pavement**: 2 m of 30 cm stone at
+     the face, 4 m of building behind it, the deck still over the whole cell. A
+     walkway at the wrong end of the cell means the sign of `-hd` is wrong;
+   - **is there still a mound?** This is the open half. The kerb is real stone
+     now, so terrain rising to meet it is what a kerb looks like - what to look
+     for is a ridge out across the grass between the road and the hall, which
+     would be the generated path aligning ground that nothing of ours flattens.
+     If it is there, the next lever is a terrain alignment face under the cell,
+     and that is a `NOTES.md` open question rather than a guess;
+   - the `hall footways:` line should read `z = 0.3` at every position and
+     `y` one metre in from the cell's face, with `linked levels:` reading the
+     same point as each hall's street end;
+   - `0 curve(s) refused` is still the expected count. A hall that refuses all
+     four curves is an island again;
+   - a row of **adjacent** halls should be one footway and one pavement: the
+     lanes meet at the shared cell edge, which is a coincident node and
+     therefore a join, and the stone meets with `SUPPORT_SEAM` between;
+   - and the **placement preview** carries the walkway too, since both come out
+     of `concourseModels`.
+8. **A road along the frontage.** Build a road past the station where a hall
+   cell is, then try to place the hall. The engine's module collision check is
+   height-blind and runs after our hook - the same mechanism that makes the
+   cargo station building unplaceable - so a refusal here is expected rather
+   than surprising, and what matters is that it is a refusal and not a crash.
+   If it refuses, the answer is a shallower cell, which is a number and not a
+   redesign. Note that this now pulls against step 7: the footway wants a road
+   close to the cell's face, and this step is about how close the engine will
+   let one be.
+9. **Two entrances on one frontage.** Add a second entrance 40 or 80 m along the
+   same side. The cell under that entrance must not be offered as a hall - it
+   would wall its road off - and no two hall slots may land at one position. The
+   log says both: the second entrance gets its own entry on the hall line, and
+   the `withheld` count is where the refusals show up. The 2026-10-26 run had
+   two entrances on **opposite** sides, which exercises neither rule.
+10. **Save, reload, rebuild.** Halls are new savegame keys in a new id band, so
+    this is T7 again for one module: save with three halls placed, reload, and
+    then *edit* - the geometry comes back from the save, and only a rebuild
+    re-runs `updateFn`. A hall that comes back in the wrong cell means the id
+    packing disagrees with itself across a save.
+11. **Shorten the deck.** Remove the outermost platform tile and watch what
+    happens to the hall under it. Expected: its slot is gone, the engine drops
+    the module with its own "N modules will be removed" notice, and the log
+    carries `concourse hall module(s) have no slot any more`. A module dropped
+    silently is the thing to look for.
+
+
 ## Results
 
 | test | result | notes |
@@ -572,17 +714,18 @@ what each case was watching for; the results are in the table at the bottom.
 | T2 edit elevated level, unconnected | pass 2026-10-09 | underpasses, extra tracks and extra platforms all work |
 | T2 edit elevated level, **track connected** | pass 2026-10-09 | was broken by the `snapNodes` conversion; fixed |
 | T2 extend the deck to the entrance *(new)* | **pass 2026-10-21** | first attempt was a half pass: the tile over the entrance was withheld as designed, but a column is four tiles and the entrance covers only one of them, so the deck grew around the road and continued past it, leaving a hole over the crossing that could never be removed. Second pass added the same day and confirmed in the next session - `deck columns blocked at y = -22.5, -20.0, -17.5; rail slots not offered because the deck cannot reach past one: 104 (y <= -17.5)`, nothing offered on that side, and the far side still extends (columns at y = -5, 0, +5 all took modules). Round sixteen |
-| T2 freight platform *(new)* | **crash 2026-10-22, fixed, placement re-confirmed** | replacing a passenger platform with a cargo one killed the game: `Duplicate edge error` at `TransportNetworkSystem.cpp:299`, our pedestrian link drawing a second lane over the cargo addon's own vertical edge. Two bugs, one latent since `linkLevels` was written - ends were classified by height, and a lifted addon hangs at z = 5 - see "The freight platform crash". Placement confirmed working again; the rest of the section wants a pass on the new build |
+| T2 freight platform *(new)* | **crash 2026-10-22, fixed, placement re-confirmed** | replacing a passenger platform with a cargo one killed the game: `Duplicate edge error` at `TransportNetworkSystem.cpp:299`, our pedestrian link drawing a second lane over the cargo addon's own vertical edge. Two bugs, one latent since `linkLevels` was written - ends were classified by height, and a lifted addon hangs at z = 5 - see "The freight platform crash". Placement confirmed working again. **2026-10-23 on the fixed build**: no crash, and **cargo transfers between the levels** through the concourse store at `CONCOURSE_STOCK_CAPACITY = 100` |
 | T2 edit elevated level, **re-check after the deletion bug** | pass 2026-10-12 | add and delete platforms and tracks, then re-add and delete again. Regressed twice in one day and both causes were elsewhere: a seeded concourse, whose slot is derived from the street entrance, and then the zeroed rail slot reservations added while chasing it - a track module's only model is invisible and collider-less, so the slot rectangle is the only thing the cursor can find it by. See `NOTES.md`, "Round seven" |
 | T3 edit lower level *(new)* | pass 2026-10-09 | second bus line and second entrance both work |
 | T4 upgrade tools *(new)* | **pass 2026-10-22** | steps 1-3 and 5-6 on 10-21: the catenary goes on, an **electric locomotive runs**, and it comes off again; removing it raises the game's own "line is incomplete" notice, which clears when it goes back on - correct behaviour, not a fault. Two earlier failures, same symptom both times: 10-09 `isAffectedByToolFn` would not resolve on the tool thread; 10-12 `upgradeFn` declined on a gate reading `entry.metadata`. Step 4 closed 10-22: dragging track from the Tracks menu **collides, as it should** - that is the builder, not an upgrade path. The two real routes both work, the upgrade tool and replacing the module. Separately parked: the upgrade tool lists no high-speed variant. Round seventeen |
 | T5a concourse *(new)* | **pass 2026-10-22**, step 7 open | snapping the station to an existing road works with the concourse seeded at its full 40 m width, re-confirmed after the widening. seeded again as of 2026-10-21 and it arrives where it should: `seeded: ... + 1 concourse`, `1 catchment circle(s) and +100 pool capacity on each of 2 stations`, no catchment warning, and it deletes and goes back again (slot `820015500`, `12->11` then `11->12`). The mesh reads as intended - a solid block with a hole the entrance road fits through. Steps 1-2 pass 10-22: the station places **snapped to a road** with the concourse seeded, and the concourse goes back after a demolish with the road already there - the asymmetry about seeded geometry being checked against the world is cleared. Round six's condition also run that day: a **platform deletes** with the concourse in the build. Round seventeen |
 | T5 supports | **place and delete pass 2026-10-22** | solid blocks, filling their cells, lining up with each other. A support **deletes** with neighbours either side - confirmed twice: first against the engine's placeholder, then again with the real `support_block.mdl` loading, whose collider is its mesh and whose slot rectangle is zeroed by the trim. That is round three's feared configuration exactly, and it deletes. One cell inside a bus platform's rectangle is now offered with a shortened click target rather than withheld | One cell, inside the bus platform's own rectangle, is never offered; accepted, see round twelve |
-| T5b passengers reach the upper platform *(new)* | **pass 2026-10-22** | run as the no-catchment interchange test: empty catchment, bus one end, train the other, so throughput is the proof. Transfers **both ways**. They **teleport** rather than walk, which a stock island platform with no underpass does too - so this says the station works and says nothing about `linkLevels` |
-| T6 pedestrian link *(new)* | **steps 1-4 pass 2026-10-22**, step 5 open | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 passed as the T5b interchange test, in both directions, so the levels are not isolated and the blocker is closed. Step 5 - whether the link is what carries it - is the open one, and the teleport says probably not. **Re-opened 2026-10-22:** the `existing person lane(s) already cross between the levels: 90 edge(s)` line it was partly answered from was measuring the wrong thing - both ends of its example are rail. The replacement line counts person nodes the two levels *share* and prints each level's z profile; a shared count of zero plus a street end at z = -7.0 would mean the link is the only route and is attached to a stub. **That is exactly what it reported**, and the cause was found: rail's underpass model (`tn_underground_connection.mdl`, the only lane model in the game with nodes at z = -7) was landing in the street family's lists, so the upper level's walkable network ended at the foot of its own stairs and the link was joining rail to rail. Fixed by `moveRailModelsToRail`; the link now reports `street (-47.5,-13.8,0.3) -> rail (-47.5,-14.0,13.1), a climb of 12.8 m`. **Step 5 still needs a walking observation in game** - the numbers are right, nobody has watched a passenger use it |
+| T5b passengers reach the upper platform *(new)* | **pass 2026-10-22** | run as the no-catchment interchange test: empty catchment, bus one end, train the other, so throughput is the proof. Transfers **both ways**. They **teleport** rather than walk, which a stock island platform with no underpass does too - so this says the station works and says nothing about `linkLevels`. **The teleport is explained as of 2026-10-23**: it is what the engine does when no walkable path exists, which was the case that day - the link was joining rail to rail. On the fixed build they walk. See T6 step 5 |
+| T6 pedestrian link *(new)* | **pass 2026-10-23** | `linked levels: (20.0,-15.0,5.0) -> (20.0,-15.0,13.1)` on every rebuild, from 108 grade and 336 elevated person nodes, and no refusal line. Step 3 passed as the T5b interchange test, in both directions, so the levels are not isolated and the blocker is closed. Step 5 - whether the link is what carries it - is the open one, and the teleport says probably not. **Re-opened 2026-10-22:** the `existing person lane(s) already cross between the levels: 90 edge(s)` line it was partly answered from was measuring the wrong thing - both ends of its example are rail. The replacement line counts person nodes the two levels *share* and prints each level's z profile; a shared count of zero plus a street end at z = -7.0 would mean the link is the only route and is attached to a stub. **That is exactly what it reported**, and the cause was found: rail's underpass model (`tn_underground_connection.mdl`, the only lane model in the game with nodes at z = -7) was landing in the street family's lists, so the upper level's walkable network ended at the foot of its own stairs and the link was joining rail to rail. Fixed by `moveRailModelsToRail`; the link now reports `street (-47.5,-13.8,0.3) -> rail (-47.5,-14.0,13.1), a climb of 12.8 m`. **Step 5 passed 2026-10-23**: passengers were watched **walking** up through the concourse and crossing to the platforms by the rail station's own passenger crossings. `142 street (z 0.0..0.3), 2208 rail (z 5.0..13.1); 0 node(s) shared between the levels` - both families filed correctly now, so stock joins the levels nowhere and our lane is the only route. `linkLevels` is load-bearing and stays, and `vehicleNodeKeys` with it: 11 refusals in that session |
 | T7 save / reload / rebuild | **steps 1-2 pass 2026-10-22**, step 4 to re-run | saved, loaded, and the station is fully functional - both lines still run. Module editing after the reload (placing supports, which is what turned up the support sizing) exercised the rebuild path too, so step 3 is covered in substance. **Step 4 wants re-running**: support ids changed the same day, one cell per deck tile instead of five, so no support in any existing save has been through a save with the ids it will ship with |
 | T8 mod removal | **n/a - declared, not tested 2026-10-22** | the mod promises the worst grade instead of measuring one: keep it enabled while a save holds a station. The recovery path (deactivate, reactivate, reload) is still worth two minutes |
 | T9 awkward cases | **pass 2026-10-22** | all seven as expected. The two that mattered: **bulldozing with a bus and a train running through both levels did not crash** - the `TransportNetworkSystem` assertion did not fire, so `vehicleNodeKeys` holds - and the game's "line is no longer connected" notice is correct behaviour, cleared by rebuilding the platform. A **second concourse** can be placed across a road driven through the structure. Case 3 was made moot instead of passed: `yearFrom` is 1930 now, which is when the seeded track type starts to exist |
+| T10 concourse hall *(new)* | **part-run 2026-10-26**: steps 1-3 and 7 pass, 6 drew four lanes without crashing | the question the module rested on is answered - a hall slot takes a pip and the building fills its cell, with 0 of our 72 slots filtered. The footway of step 7 came out of that run and works - `linkable` is honoured even after the hooks - but its kerb height needs geometry under it, which is what the walkway in the mesh is, and whether that settles the terrain is unrun. Step 9 is untouched by it, because the run's two entrances were on opposite sides |
 
 
 ## Before publishing

@@ -4,7 +4,8 @@
         "multi_layer_station.con.lua",
         "multi_layer_station.script.lua",
         "ml_support.module.lua",
-        "ml_concourse.module.lua",
+        "ml_concourse_arch.module.lua",
+        "ml_concourse_hall.module.lua",
         "support_block.mdl",
         "category_ml_station.res.lua",
         "category_ml_station@2x.tga",
@@ -14,9 +15,9 @@
         "ml_station_preview@2x.tga",
         "ml_support@2x.tga",
         "ml_support_preview@2x.tga",
-        "ml_concourse@2x.tga",
-        "ml_concourse_preview@2x.tga",
-        "ml_probe.gs.lua",
-        "ml_probe.script.lua"
+        "ml_concourse_arch@2x.tga",
+        "ml_concourse_hall@2x.tga",
+        "ml_concourse_arch_preview@2x.tga",
+        "ml_concourse_hall_preview@2x.tga"
     ]
 }

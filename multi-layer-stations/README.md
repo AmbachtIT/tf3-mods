@@ -84,7 +84,9 @@ the rail tab.
   the merge rules.
 - [PLAN.md](PLAN.md) - the phases and what each probe settled.
 - [probe/](probe/) - the throwaway probe mod that answered the feasibility
-  questions, with its test protocol in [probe/TESTS.md](probe/TESTS.md).
+  questions, with its test protocol in [probe/TESTS.md](probe/TESTS.md), and
+  [probe/entity_probe/](probe/entity_probe/) - the game script that answered
+  everything the construction log cannot see, archived rather than shipped.
 - [../NOTES.md](../NOTES.md) - the engine-general findings this builds on.
 
 ## What v0.1 does and does not do
@@ -94,12 +96,51 @@ at level +1 in one construction, sharing one result table between them; lifts
 all of the rail family's output 12 m in one pass at the end of a wrapped
 `terminateConstructionHook`, with a quarter turn so the tracks cross the bus
 exit; drops its terrain alignment and ground faces; links the two levels'
-pedestrian networks with one lane; and routes each
+pedestrian networks with one lane per concourse; and routes each
 of `preProcessFn`, `upgradeFn` and `isAffectedByToolFn` to whichever family owns
 the slot being acted on.
 
 Does not, yet: any choice of transport type per level, road-over-rail as well as
-rail-over-road, cargo, or anything below grade.
+rail-over-road, or anything below grade.
+
+Three things about how it behaves in play are worth knowing before you build
+one, because each of them looks like a bug and is not:
+
+- **Passengers walk between the levels, through a concourse.** They go up from
+  grade through the building and reach the platforms by the rail station's own
+  passenger crossings. The lane that makes this possible is the only route there
+  is: the two levels share no walkable node otherwise, so without a concourse in
+  the build there is nowhere for that climb to start. Each concourse you place
+  gets its own climb, so a long frontage is not served by one staircase at one
+  end of it.
+- **Freight crosses between the levels through the concourse's goods store.**
+  Each concourse is a small warehouse - 100 units of universal storage per
+  module - and that store is the interchange. Freight in this game never passes
+  from station to station; it passes to stock in a station's catchment and out
+  again. **A station with no concourse cannot interchange cargo at all.**
+- **It is two stations internally, and one station to you.** Each level is a
+  separate station record in its own station group, which is why a line stops at
+  one level rather than at "the station". But clicking either level opens a
+  single dialog with **one station name** and a tab per part - `Road station`,
+  the rail level, and `Warehouse` for the concourse's store.
+
+A concourse is therefore close to a required module rather than an optional
+one, and one is seeded in the default station for that reason.
+
+**There are two of them, and they are the same building.** *Concourse - Road
+Arch* is the one that spans an entrance road, and it is offered on the entrance
+only; *Concourse - Hall* fills the same 40 x 6 m cell solid and is offered along
+the rest of the frontage, one cell per deck tile, so a row of them reads as one
+building the length of the station. They cost the same and carry the same
+catchment, capacity, goods store and stairs - what differs is the hole in the
+bottom of the arch, and where each can stand.
+
+A hall also brings a footway of its own. The front 2 m of its cell is a 30 cm
+walkway - a kerb at the same height as the game's own pavements, so stepping
+from a road onto it is level - and along it runs a path, with a spur to the kerb
+for the game to join to a street and a link back into the station's own paths.
+A row of halls is one pavement and one path. An arch needs none of it, because
+it stands in the entrance's.
 
 
 ## Where to find it in the build menu
@@ -109,8 +150,8 @@ ones:
 
 - **Road menu -> Multi-layer Stations** - the station itself, sitting directly
   after the stock Buildings category.
-- **Module menu -> Multi-layer** - the support and the concourse, after the
-  stock module categories and before Misc.
+- **Module menu -> Multi-layer** - the support and the two concourses, after
+  the stock module categories and before Misc.
 
 A category is an ordinary resource (`type = "menu_category"`) that the build
 menu collects by type, so any mod can add one; root `NOTES.md` has the field
@@ -130,11 +171,16 @@ entrance below, and **one concourse** over the entrance - which is what gives
 either level a catchment of its own. No station building is seeded on either
 level; the concourse stands in for both.
 
-The concourse is **one deck tile wide**, 40 x 6 m, so it ends where the module
-above it ends and lines up with the supports either side. Its piers stand at
-x = +-12, leaving a 21.8 m opening for the 16 m entrance road; the 8 m at each
-end, beyond the piers, is solid. It is placed, though, by clicking a 2 m band at
-its right-hand pier - see the limitations below.
+A concourse is **one deck tile wide**, 40 x 6 m, so it ends where the module
+above it ends and lines up with the supports either side. The arch's piers stand
+at x = +-12, leaving a 21.8 m opening for the 16 m entrance road; the 8 m at each
+end, beyond the piers, is solid. The arch is placed, though, by clicking a 2 m
+band at its right-hand pier - see the limitations below.
+
+The halls go either side of it, on the cells the deck covers: with the default
+four-tile deck that is three of them, under the tiles at 40, 80 and -40 m, and
+extending the deck extends the row. The cell an entrance road passes through is
+never offered as a hall, because a hall is solid and would wall the road off.
 
 
 ## Contributing art
@@ -154,7 +200,8 @@ engine's, so the `.con` and `.module` files ask for the name without it:
 | `ml_station@2x.tga` | 240 x 150 | 32bpp BGRA, type 2, descriptor 0x08 | the tile in the Road menu |
 | `ml_station_preview@2x.tga` | 720 x 405 | 24bpp BGR, type 2, descriptor 0x00 | the large image in the side panel |
 | `ml_support@2x.tga`, `ml_support_preview@2x.tga` | as above | as above | the support, in the module menu |
-| `ml_concourse@2x.tga`, `ml_concourse_preview@2x.tga` | as above | as above | the concourse, in the module menu |
+| `ml_concourse_arch@2x.tga`, `ml_concourse_arch_preview@2x.tga` | as above | as above | the road arch, in the module menu |
+| `ml_concourse_hall@2x.tga`, `ml_concourse_hall_preview@2x.tga` | as above | as above | the hall, in the module menu |
 | `category_ml_station@2x.tga`, `category_ml_modules@2x.tga` | 48 x 48 | **8bpp greyscale**, type 3 | the two menu category buttons |
 
 The category icons are a different format from the rest: a greyscale coverage
@@ -170,9 +217,12 @@ The 3D art is the other half, and the bigger one:
   a pier and a span, and anything replacing it should know that the cell it has
   to fill is **5 x 40 m by 12 m tall** for a deck tile, and that its collider
   wants to stay inside that (`NOTES.md`, round three).
-- the concourse is drawn from the same cube in `concourseModels`: a **40 x 6 m**
-  footprint, 12 m tall, with a **21.8 m opening** in the middle for the entrance
-  road to pass through. A tunnel portal is what it is standing in for.
+- both concourses are drawn from the same cube in `concourseModels`: a
+  **40 x 6 m** footprint, 12 m tall, with a **21.8 m opening** in the middle of
+  the arch for the entrance road to pass through and no opening at all in the
+  hall. A tunnel portal is what the arch is standing in for; the hall wants a
+  facade - doors, glass, a departure board - and the two have to agree at the
+  seam where they meet, which is why one function draws both.
 - both are drawn with a plain concrete material for a measured reason - see
   `NOTES.md`, "A reused mesh brings its UVs" - and a replacement that brings its
   own mesh does not inherit that constraint.
@@ -246,3 +296,24 @@ Measured, understood, and left as they are for v0.1:
   that tile, and a support now has to clear the whole 40 m of it. The engine
   refuses the module as a collision. Leave that tile open, or build the
   connection at the end of a tile the deck does not need held up.
+- **The elevated level's tab is labelled `Tram station`.** It is a train
+  station; the label is wrong; and it is **the base game's bug, not this mod's.**
+  The engine works a station's label out from its group's carrier list, and it
+  maps the transport mode `TRAM_TRACK` to the tram carrier - while every stock
+  rail track template, `simple`, `standard` and `high_speed` alike, carries
+  `TRAM_TRACK` so that tram track can share a rail alignment. The routine that
+  picks the name then has no `break` in it, so the **last** carrier in the list
+  wins, and the order happens to be rail then tram.
+
+  Which means **every rail station in the game is labelled this way**. You have
+  never seen it because the header is only drawn when a station has more than
+  one part to tab between, and a plain rail station has one. This station has
+  three, so the header appears and the wrong word comes with it.
+
+  Measured rather than guessed: all seven of the elevated level's terminals
+  report the same pair of transport modes, `TRAIN` and `TRAM_TRACK`, with no
+  tram *vehicle* mode anywhere. Nothing a construction can declare overrides it,
+  so fixing it from here would mean either shipping a bespoke track type without
+  `TRAM_TRACK` - which would cost you the track-type and catenary tools on this
+  station - or overriding one of the game's own interface files, which would
+  fight every other mod that touches it. Reported upstream instead.

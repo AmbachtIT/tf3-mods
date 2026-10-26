@@ -353,6 +353,60 @@ for rebuild matching ("Two subconstructions must not share a `tag`"). Height is
 a property of geometry that a level transform is free to move; the tag is not.
 
 
+## `linkable` is how a construction's pedestrians reach the road, and it belongs at grade
+
+Confirmed in game 2026-10-26, in `multi-layer-stations`: a station module 40 m
+from any stock entrance had no way in on foot, and one flag fixed it.
+
+A person lane joins the **street network** if its lane list carries
+`linkable = true`. `laneutil.createLane(curves, modes, speed, width, linkable)`
+copies its last argument straight onto the lane
+(`base/content/scripts.zip`, `scripts/construction/laneutil.lua`), and the
+engine then generates its own little connection from that lane to the nearest
+street - the same connection every town building gets to the pavement. Nothing
+else is needed: no street edge of your own, no `snapNodes`, no `snapPoint`.
+
+Two shipped examples, and they are the only two patterns:
+
+- **a town building** returns the lane from its own `updateFn`: one curve named
+  `entrance_linkable`, `createLane(..., true)`, and a second, plain curve for
+  the path inside the parcel (`base/content/buildings/townbuildingutil.lua:207`).
+  It is the only `lua` in the install that passes the flag;
+- **the stock street station** declares it in the **model** instead:
+  `stations/street.zip`, `street/modular_street_station/models/pedestrian_era_a/straight.mdl`
+  carries `metadata.transportNetworkProvider.laneLists[1].linkable = true`.
+  There are era_a/b/c sets of these perron pieces, 5 m at a time, and they are
+  what makes a street station linkable all the way round its platforms.
+
+Three things worth knowing before using it:
+
+- **it works on a lane list added after the hooks have run.** Both stock
+  patterns declare the flag earlier - in a module's return value or in a model -
+  and `multi-layer-stations` cannot: a two-level construction only knows where
+  its levels are once both families' hooks are done, so its lanes go into
+  `subconstructions[1].laneLists` at the end of `updateFn`. The engine links
+  them anyway;
+- **the flag is per lane list, not per curve.** Stock gives the linkable curve a
+  list of its own, and so should you: everything else stays unlinkable, which is
+  what you want for a lane that runs between two nodes you chose;
+- **a linkable node needs geometry under it.** Stock puts its pedestrian lanes
+  at `z = 0.3` throughout - the perron pieces, the station sidewalks, the street
+  templates' own footways - because 0.3 is this game's **street kerb**, and
+  matching it is what makes walking from a road onto a station level. But that
+  0.3 is the top of a kerb the model carries, not a height the terrain was
+  raised to. Copying the number without the kerb grew a 30 cm hill per building,
+  reported from the game as *"they do spawn little hills in the terrain the
+  pedestrians have to climb"*: the generated connection is a real path edge, and
+  a path edge pulls the terrain up to meet its ends. So either lay 30 cm of your
+  own stone under the lane, or put the lane at grade - the number on its own is
+  not the thing to copy.
+
+A person node at grade is at the same height as a construction's **vehicle**
+lanes, and a person node coincident with a vehicle node is fatal (see above), so
+whichever height you choose, check candidate nodes against the construction's own
+vehicle lane nodes and drop the curve rather than the build.
+
+
 ## Do not let a delegated call decide what the player sees
 
 Corollary of the per-thread `util.useFn` finding above, and worth stating on its
@@ -1282,35 +1336,89 @@ without guessing:
   * **missed** - `updateFn` never runs at all, so there is no preview line for
     that slot id anywhere in the session. The engine never found a slot.
 
-## Several `station` records in one construction join one StationGroup
+## Several `station` records in one construction become several StationGroups - and interchange works anyway
 
-**Confirmed in-game 2026-10-09** with `multi-layer-stations`, whose two levels
-are two separate `station` records in one construction - a bus station at grade
-and a train station at +12 m. Passengers use both and **transfer between them**,
-with no terminal merging, no lane-index rebasing and no code at all. The engine
-groups the records.
+**Corrected 2026-10-22, re-confirmed 2026-10-23.** The heading used to read
+"join one StationGroup" and that was wrong. `multi-layer-stations` has two
+separate `station` records in one construction - a bus station at grade and a
+train station at +12 m - and `stationGroupSystem.getStationGroup`, asked
+directly, reports **two groups with one station each** (`26028 x1, 26029 x1`).
+One construction, two stations, two groups. There is no way to join them:
+`cmd.d.tl` has no join or merge command and the system is read-only.
 
-This is worth knowing before designing any multi-station construction, because
-the alternative design - one `station` record with terminals of two carriers -
-was tried first, does **not** work, and is the obvious thing to reach for. A
-single station entity carries one carrier; a *StationGroup* is what spans
-several, which is why `getCarriers` is a group-level call.
+What is true, and what led to the wrong heading, is that **passengers transfer
+between them** with no terminal merging, no lane-index rebasing and no code at
+all - observed 2026-10-09 and every session since. The error was inferring the
+grouping from the transfer, which the subsection below shows proves nothing
+about mechanism: the engine moves an interchanging passenger whether or not the
+two platforms are related, teleporting them when there is no authored path. So
+**interchange is not evidence of a StationGroup**, and a construction that needs
+its stations genuinely joined - for a shared catchment, or for cargo - has to
+provide the join itself. For cargo that means a warehouse-style goods store
+reachable from both, which is what that mod's concourse is.
+
+What the player sees does **not** give the groups away, so do not reach for this
+section to explain a UI symptom: the construction presents as one named station
+with a tab per subconstruction. See the first consequence below.
+
+The rest of this section is unaffected; it is about what a group *is*, not about
+how many of them one construction makes. It is worth knowing before designing
+any multi-station construction, because the alternative design - one `station`
+record with terminals of two carriers - was tried first, does **not** work, and
+is the obvious thing to reach for. A single station entity carries one carrier;
+a *StationGroup* is what spans several, which is why `getCarriers` is a
+group-level call.
 
 Two consequences come with it, and both are engine behaviour rather than
 choices:
 
-- **A StationGroup has one name.** The stations in it cannot be named
-  individually. Free interchange and a single name are the same fact seen from
-  two sides.
+- **A StationGroup has one name - and so, in practice, does a multi-station
+  construction.** Observed directly 2026-10-23 on `multi-layer-stations`:
+  despite the two groups, clicking *either* level opens **one dialog with a
+  single station name**, carrying one tab per subconstruction - `Road station`
+  for the grade level, `Tram station` for the rail level (mislabelled; see the
+  next bullet) and `Warehouse` for the concourse's goods store. So the entity
+  window is assembled per **construction**, not per station group, and the group
+  count is invisible in it.
+
+  **How the single name relates to the two groups is not established.** It may
+  be the construction's own name, or two groups generated from the same position
+  landing on the same string. Do not infer it either way - inferring the naming
+  from the group count is a mistake that has already been made in this file
+  once, and corrected on the strength of one look at the dialog.
 - **The entity window's label is the group's, and the last carrier wins.**
   `getSubconstructionDescriptionAndSortKey`
   (`gui/entity_window/make_entity_window.tl:46-101`) reads
   `getCarriers(getStationGroup(entity), -1, -1)` and walks the list assigning
   `_("Road Station")` / `_("Train Station")` / `_("Tram Station")` / ... with
-  **no `break`**. So every station in the group shows the same label, and which
-  one depends on carrier order, not on which station was clicked.
+  **no `break`**. So a tab is labelled from its group's carrier list with the
+  **last** carrier winning, not from the station that was clicked.
 
-### The transfer is instant, and no one walks it
+  **Measured 2026-10-23, and it is vanilla's bug, not a mod's.** A rail
+  station's group reports carriers `RAIL -> TRAM`, because the engine derives
+  carriers from the terminals' edges and **maps `TransportMode.TRAM_TRACK` to
+  `Carrier.TRAM`** - and every stock rail track template carries `TRAM_TRACK`
+  (`track/{simple,standard,high_speed}/*.street_template.lua`; rail track in TF3
+  *is* a street template, the two differ only by `transportModes`). Measured on
+  `multi-layer-stations`: all seven rail terminals report carriers `1 -> 2` with
+  modes `7+14` = `TRAIN+TRAM_TRACK`, with **no** vehicle `TRAM` (5) or
+  `ELECTRIC_TRAM` (6) anywhere. The bus station beside it reports `ROAD` with
+  `BUS+TRUCK`, which is the control.
+
+  So **every rail station in the game is labelled `Tram Station`** by this
+  function, and `TRAM` being last in the list is the only reason - reverse the
+  order and it would read `Train Station`.
+
+  **Why nobody has ever seen it:** a station group with a single subconstruction
+  tab does not render the header at all, so vanilla hides it. Confirmed against
+  a stock station. It becomes visible only in a construction with **several**
+  station-like subconstructions, which is exactly what a multi-station
+  construction is - so any mod doing this will inherit the wrong word and should
+  not go looking for the fault in its own merge. Not fixable from the mod side:
+  `TerminalDef` has no mode or carrier field, and the only levers are a custom
+  track template without `TRAM_TRACK` or overriding the engine's GUI file.
+
+### The transfer happens with or without a walkable path - the teleport is the fallback
 
 **Measured 2026-10-22**, on a station deliberately built with **nothing in its
 catchment** - so the station generates no passengers of its own and anyone
@@ -1332,8 +1440,30 @@ and it may not be load-bearing at all. Which is worth knowing before paying for
 one, since a hand-built `PERSON` lane is also the one thing that can hard-crash
 the game (see "A PERSON lane must never share a node with a vehicle lane").
 
-What is **not** settled is whether the teleport is a fallback for a missing path
-or the only mechanism there is. Nothing here distinguishes them.
+**Settled 2026-10-23: the teleport is a fallback, not the only mechanism.** The
+same station, with its hand-built lane now genuinely joining the two levels,
+shows passengers **walking** it - up through the concourse at grade and across
+to the platforms by the rail station's own passenger crossings. On 2026-10-22
+the lane's two ends were both rail nodes, so there was no path at all and the
+transfer teleported; on the fixed build there is one and they use it.
+
+So the engine prefers an authored `PERSON` path and teleports only when none
+exists. Two consequences, and they pull in opposite directions:
+
+- a successful transfer still proves nothing about whether a path exists, so the
+  paragraph above stands as a **testing** warning: a lane cannot be validated by
+  watching passengers interchange;
+- but a lane that exists **is** used, so it is not cosmetic. The guess above
+  that it "may not be load-bearing at all" was wrong. Whether it is worth paying
+  for is a question about the walk, not about whether interchange works:
+  `multi-layer-stations` keeps its lane because the alternative is passengers
+  teleporting through 12 m of concrete, and because the measurement that decided
+  it was the count of person nodes the two levels **share** - zero, with the
+  families filed correctly - not an observation of a transfer.
+
+The crash risk is unchanged and still the reason not to build one casually (see
+"A PERSON lane must never share a node with a vehicle lane"); in that station's
+most recent session the refusal that guards it fired 11 times.
 
 
 ## Two subconstructions must not share a `tag`
@@ -1572,6 +1702,14 @@ names, so it is a syntax gate, not a substitute for `deploy.ps1 -Validate`.
 
 The `lupa` wheel builds against Lua 5.5 while the game is on 5.4, which has not
 mattered for anything written so far.
+
+**Do not run it with `python -I`.** Isolated mode drops user site-packages, and
+that is where `pip install --user` put `lupa` on this machine, so the checker
+exits with its own "lupa not installed - run: python -m pip install lupa" and
+the install it tells you to do reports `Requirement already satisfied`. Cost a
+detour on 2026-10-23. `-I` is worth keeping for a script that *reads* extracted
+game archives, since it stops a planted module beside the data being imported;
+`luacheck.py` reads this repo's own source, so plain `python` is right.
 
 It also does a second, non-syntax pass: **calls to names that are never defined
 as a local in the file.** A Lua chunk compiles happily with a call to a nil

@@ -209,11 +209,26 @@ def glyph_support(c, x, y, s):
     c.rect(x - 2 * s, y + 32 * s, x + 46 * s, y + 35 * s)
 
 
-def glyph_concourse(c, x, y, s):
-    """A deck on two piers with the span open: the concourse over its road."""
+def glyph_arch(c, x, y, s):
+    """A deck on two piers with the span open: the arch over its road."""
     c.rect(x, y, x + 44 * s, y + 8 * s)
     c.rect(x + 2 * s, y + 8 * s, x + 12 * s, y + 32 * s)
     c.rect(x + 32 * s, y + 8 * s, x + 42 * s, y + 32 * s)
+    c.rect(x - 2 * s, y + 32 * s, x + 46 * s, y + 35 * s)
+
+
+def glyph_hall(c, x, y, s):
+    """The same cell filled solid, with a doorway: the hall beside the arch.
+
+    Deliberately the arch's silhouette with the span bricked up, because that
+    is exactly what the module is - same footprint, same deck, no road through
+    it - and the two tiles sit next to each other in the menu.
+    """
+    c.rect(x, y, x + 44 * s, y + 8 * s)
+    c.rect(x + 2 * s, y + 8 * s, x + 42 * s, y + 32 * s)
+    # The doorway, cut back out of the fill: the hall is the variant people walk
+    # through rather than drive through.
+    c.rect(x + 18 * s, y + 8 * s, x + 26 * s, y + 26 * s, 0)
     c.rect(x - 2 * s, y + 32 * s, x + 46 * s, y + 35 * s)
 
 
@@ -230,8 +245,10 @@ PIECES = [
      ("MULTI-LAYER", "STATION")),
     ("ml_support", glyph_support, "ELEVATED SUPPORT", "MODULE",
      ("ELEVATED", "SUPPORT")),
-    ("ml_concourse", glyph_concourse, "CONCOURSE", "MODULE",
-     ("CONCOURSE",)),
+    ("ml_concourse_arch", glyph_arch, "CONCOURSE - ROAD ARCH", "MODULE",
+     ("CONCOURSE", "ROAD ARCH")),
+    ("ml_concourse_hall", glyph_hall, "CONCOURSE - HALL", "MODULE",
+     ("CONCOURSE", "HALL")),
 ]
 
 
@@ -254,10 +271,10 @@ def make_preview(name, glyph, title, kind):
     glyph(c, 50, 80, 4)
     c.text(title, 270, 92, 3)
     c.text(kind + " - PLACEHOLDER ART", 270, 140, 2, 170)
-    c.text("ART WANTED: REPLACE " + name + "@2X.TGA (240X150 BGRA)",
-           46, 268, 2, 210)
-    c.text("AND " + name + "_PREVIEW@2X.TGA (720X405 BGR)", 46, 296, 2, 210)
-    c.text("SEE README, CONTRIBUTING ART", 46, 330, 2, 160)
+    c.text("ART WANTED - REPLACE BOTH:", 46, 250, 2, 170)
+    c.text(name + "@2X.TGA (240X150 BGRA)", 46, 278, 2, 210)
+    c.text(name + "_PREVIEW@2X.TGA (720X405 BGR)", 46, 306, 2, 210)
+    c.text("SEE README, CONTRIBUTING ART", 46, 340, 2, 160)
     return c
 
 

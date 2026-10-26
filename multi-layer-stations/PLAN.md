@@ -2,10 +2,19 @@
 
 Feasibility: **proven**. The station is built, placeable, editable, and as of
 2026-10-22 both **passengers and freight move between the two levels** in a real
-save. What remains is release work, not design work, and it is listed in
-*Release: what is left* immediately below. The phase sections after it are kept
-as the record of how each question was settled - read them for the reasoning,
-not for the plan.
+save. As of 2026-10-23 the last open *behavioural* question is closed too:
+passengers **walk** between the levels through the concourse, so the pedestrian
+link stays.
+
+One feature went in after that, on 2026-10-26 and deliberately before
+publishing: the concourse is now **two modules**, an arch over the entrance road
+and a hall for the rest of the frontage, and the pedestrian link is one lane per
+concourse rather than one per station. It was asked for from the game, it is the
+last thing that will change the shipped behaviour, and it is item 0 of the
+release list below because it is the only item there that has not been in front
+of the game. Everything after it is release work, not design work. The phase
+sections further down are kept as the record of how each question was settled -
+read them for the reasoning, not for the plan.
 
 The original framing, kept because it still explains the ordering: everything in
 `NOTES.md` was read out of the install and nothing was confirmed in-game, so the
@@ -52,78 +61,141 @@ on the table only if a probe rules A out.
 ## Release: what is left
 
 Ordered so that anything that can still change the shipped behaviour comes
-before the things that only polish it. Nothing here is design work.
+before the things that only polish it.
 
-### 1. Take the probe out
+### 0. The concourse pair - written 2026-10-26, part-run
 
-`content/ml_probe.gs.lua` and `content/ml_probe.script.lua`, both marked
-TEMPORARY at the top, plus their two entries in `_content.json`. They are a
-game script: they run in every session of every save that enables the mod, on
-every `Sim Pool` thread, and they must not ship.
+Asked for from the game: a second concourse building with the same footprint,
+no road tunnel, and pedestrian connections, plus a doubt about whether
+"concourse" was the right word for either of them. What was built:
 
-Worth keeping the files somewhere first - `probe/` is the natural home - because
-they are the only way this project can see entities, and the next entity
-question will want them. Everything they taught is in `NOTES.md`, "Reaching the
-entities", including which component types can be enumerated.
+- `ml_concourse` became **`ml_concourse_arch`**, and the new module is
+  **`ml_concourse_hall`** - *Concourse - Road Arch* and *Concourse - Hall* in
+  the menu. A slot type is a savegame key, so renaming the first one was free
+  exactly once, and this was it;
+- the hall carries **everything the arch carries**: 175 m of catchment, +100
+  capacity, its own 100 units of the goods store, the same price, and its own
+  pedestrian climb. The two differ in their art and in the ground they are
+  offered on;
+- its slots are **one per deck tile along the frontage**, in the arch's own
+  40 x 6 m band, taking their frame from the entrance and their extent from the
+  deck. Tile 0 is the arch's and is never offered as a hall, nor is any cell
+  within a tile's width of another entrance;
+- `linkLevels` draws **one lane per concourse module**, anchored at that
+  module's cell, which closes Phase 10 step 2. The unanchored fallback stays for
+  a station with no concourse;
+- and each hall draws a **footway of its own**, at grade - a frontage lane
+  across its cell, a `linkable` kerb spur to its road-facing face, and a link to
+  the nearest node the station already had. That came out of the first run: the
+  volumes were right and *"there are no pedestrian connections from the new
+  concourse to the road next to it."* It works - *"fully functional"* - and the
+  second run put the geometry under it: a 30 cm walkway along the cell's face,
+  because 30 cm is the kerb every stock footway sits on and a lane at that
+  height with nothing beneath it is a lane the engine raises the ground to meet.
 
-### 2. Settle whether the pedestrian link stays
+`NOTES.md`, "The concourse becomes two modules", has the design record and the
+id arithmetic. The run of 2026-10-26 answered the question that could have sent
+this back to the drawing board - **a hall slot takes a pip**, `0 of 72` of our
+slots filtered, and the building places and reads right - and four interchange
+lanes coexisted without the duplicate-edge crash.
 
-The last open behavioural question, and it is Phase 10 step 2's: is `linkLevels`
-load-bearing for passenger interchange, or is it buying nothing?
+The footway that run asked for is in and working, and it now has a walkway under
+it; `TESTS.md` T10 step 7 says what to re-check, which is whether any hill
+survives having a real kerb to climb.
+What is left of this item is ordinary verification - T10 steps 4, 5, 8, 9, 10
+and 11 - and one thing that is older than the hall: a solid 40 m block and a
+footway at grade are both right on the flat and unproven on a slope, because
+this construction anchors terrain and never flattens it. That is an open
+question in `NOTES.md` rather than a release blocker.
 
-What is known, and the two facts pull against each other:
+### 1. The probe is out - done 2026-10-23
 
-- passengers were observed transferring between the levels and appearing to
-  **teleport** (2026-10-22), at a time when the person network was severed at
-  the foot of the rail stairs and the link was joining rail to rail - so they
-  crossed without a walkable path;
-- the levels are **two station groups**, so whatever moved them was not
-  interchange inside one group. That was the premise the "the lane may be
-  cosmetic" argument rested on, and it was false.
+`ml_probe.gs.lua` and `ml_probe.script.lua` are archived in
+[probe/entity_probe/](probe/entity_probe/) with a README covering what they
+answered and how to re-enable them, and their two entries are gone from
+`_content.json`. The deployed mod is 15 files and no game script; `deploy.ps1`
+wipes its target, so nothing stale survives in the staging area. Verified.
 
-So the observation is now unexplained rather than conclusive. Against keeping
-the lane: it is the only known hard-crash path in the mod (a person node that
-coincides with a vehicle node), which is why `vehicleNodeKeys` exists.
+They were held back until last because they are the only way this project can
+see entities, and item 7's `Tram station` label turned out to need them. That is
+answered, and nothing else was waiting.
 
-**The test is T6 step 5**: make `linkLevels` inert, repeat the interchange test,
-and watch whether passengers still cross. Cheap, and it decides whether the mod
-ships a crash path it does not need.
+One gap recorded in the archive's README, for anyone who revives them:
+`api.type["enum"].Carrier` did not resolve at runtime, so carriers and transport
+modes printed as raw integers and had to be decoded against the declaration
+order in the tealdefs. Worth hardcoding both name tables in a successor.
 
-Also unobserved either way: nobody has yet watched a passenger *walk* the link
-now that it actually connects grade to platform (`street (-47.5,-13.8,0.3) ->
-rail (-47.5,-14.0,13.1), a climb of 12.8 m`). That is the other half of the same
-run.
+### 2. The pedestrian link stays - settled 2026-10-23
 
-### 3. Play the freight path once, deliberately
+Answered in game, and the other way from the way this section was leaning:
+**passengers walk up through the concourse** and reach the platforms by the rail
+station's own passenger crossings from there. `linkLevels` is load-bearing and
+stays, and `vehicleNodeKeys` stays with it - its refusal fired 11 times in that
+session, so the crash path it guards sees live traffic rather than theory.
+
+The log is what makes it conclusive rather than anecdotal:
+
+    person nodes: 142 street (z 0.0..0.3), 2208 rail (z 5.0..13.1);
+      0 node(s) shared between the levels
+
+Zero shared nodes, with both families now filed correctly, means stock joins the
+two levels **nowhere**: the street level tops out at 0.3 m and the rail level
+starts at 5.0, so there is no coincident node for the engine to weld. The lane
+this mod draws is the only route across, and it now ends somewhere a person can
+stand - `street (-47.5,-13.8,0.3) -> rail (-47.5,-14.0,13.1), a climb of
+12.8 m`, which is the condition the shared-node report was written to check.
+
+The teleport of 2026-10-22 is explained rather than contradicted: there was no
+path then, because the link was joining rail to rail. The engine teleports a
+transferring passenger when no walkable path exists and walks them when one
+does. See `NOTES.md`, "The link is what carries them after all, and the teleport
+was a fallback".
+
+### 3. The freight path, played - settled 2026-10-23
 
 `CONCOURSE_STOCK_CAPACITY` is 100 per module, chosen 2026-10-22 over 250 so that
-two concourses buffer a train's worth of one cargo and no more. It has not been
-played at that number - the run that proved the mechanism had 500. Watch for a
-store that fills and stalls the train rather than one that keeps up, and for
-whether a real warehouse next door still feels worth building.
+two concourses buffer a train's worth of one cargo and no more. It was played at
+that number on 2026-10-23 and the transfer works as expected - no store that
+fills and stalls the train. Nothing left to decide here.
 
-### 4. Decide what the build-menu tile claims
+### 4. The build-menu tile advertises freight too - done 2026-10-23
 
-`multi_layer_station.con.lua` declares `description.cargoTypeSet` as
-`cargoClassesIncluded = { "PASSENGERS" }`. That is what the menu tile shows the
-station handles, and it is now wrong: both levels take freight and the concourse
-stores it. Either add the freight classes or decide the tile should advertise the
-station's primary purpose only - but decide it rather than leave it as the
-leftover it is.
+`multi_layer_station.con.lua` declared `cargoClassesIncluded = { "PASSENGERS" }`,
+which was a leftover and was wrong: both levels take freight and the concourse
+stores it. It now reads `{ "PASSENGERS", "UNIVERSAL", }`.
 
-### 5. The README's promises
+Those two cover everything, and they are the stock idiom rather than a guess.
+The game has exactly six cargo classes - `PASSENGERS`, `UNIVERSAL`, `BULK`,
+`FLATBED`, `GOODS`, `LIQUID` - read off every `*.cargo.lua` in
+`base/content/cargos/`, and **every freight cargo declares `UNIVERSAL` plus one
+specialization**. `{ "PASSENGERS", "UNIVERSAL", }` is what every airport, every
+small street stop and the modular harbor declare, verbatim.
 
-`README.md` has a *What v0.1 does and does not do* section and an *Accepted
-limitations* section, and three things now belong in them:
+Not syntax-checked with `tools/luacheck.py`, which needs `lupa` installed; the
+change is a table literal and a comment.
 
-- the station appears in game as **two stations**, one per level, with separate
-  names and separate line stops - a player will notice immediately and should
-  not have to wonder whether it is a bug;
+### 5. The README's promises - done 2026-10-23
+
+All four are written up. *What v0.1 does and does not do* gained a "three things
+worth knowing before you build one, because each looks like a bug and is not"
+block covering the first three below, and lost its stale claim that the mod does
+not do cargo; *Accepted limitations* gained the `Tram station` label as a
+base-game defect with the measurement behind it. What was owed:
+
+- the station is internally **two stations**, one per level, in two separate
+  StationGroups - which matters for line stops, but is **not** what the player
+  sees. Corrected 2026-10-23 against the game: clicking either level opens one
+  dialog with a **single station name** and three tabs, `Road station`,
+  `Tram station` (the rail level, mislabelled by an engine bug) and
+  `Warehouse`. The earlier claim here that the two levels get separate names was
+  an inference from the group count, never an observation, and it was wrong;
 - **freight crosses levels through the concourse's goods store**, so a station
   with no concourse cannot interchange cargo at all. This is the "required
   module" problem the plan already flags under Phase 10, and freight makes it
   sharper;
-- passengers cross by whatever step 2 concludes.
+- **passengers cross on foot**, walking up through the concourse and across by
+  the rail station's own passenger crossings - so a station with no concourse
+  strands them as surely as it strands freight. Settled 2026-10-23 (step 2).
 
 ### 6. Art is placeholder, and says so
 
@@ -148,6 +220,18 @@ Each one needs a decision, not necessarily a fix:
   `NOTES.md`; it is the sharpest remaining functional gap.
 - **a support with no collider** - whether it would still be deletable is
   untested, and it is the cheaper half of the collider problem.
+- **the rail level is labelled `Tram station`** in the entity window, when it is
+  a train station. **Measured and closed as a vanilla defect, 2026-10-23** - it
+  is not ours and cannot be fixed from here. The engine maps
+  `TransportMode.TRAM_TRACK` to `Carrier.TRAM`, every stock rail track template
+  carries `TRAM_TRACK`, and `getSubconstructionDescriptionAndSortKey` walks the
+  carriers with no `break` so the last one wins. Every rail station in the game
+  has the label; vanilla just never renders a header for a single-tab window.
+  All seven of our rail terminals report it identically, which is what rules out
+  our own merge. **Action: document it in the README and report it upstream** -
+  the alternatives are a custom track template without `TRAM_TRACK`, which costs
+  the track-type and upgrade tools, or overriding the engine's GUI file. See
+  `NOTES.md`, "The `Tram station` label is vanilla's".
 - **T8's recovery path** is unrun.
 - the menu icon is hardcoded to era C.
 
@@ -167,10 +251,12 @@ Each one needs a decision, not necessarily a fix:
 After the first release these become a compatibility contract, because a save
 holds them and a change to any of them breaks what the player built:
 
-- the support slot id packing, `SUPPORT_SLOT_BASE + slot.id * 10 + k`, and the
-  concourse's `CONCOURSE_SLOT_BASE + streetSlotId` with the variant digits
-  cleared;
-- the module names `ml_support` and `ml_concourse`;
+- the support slot id packing, `SUPPORT_SLOT_BASE + slot.id * 10 + k`, the
+  arch's `ARCH_SLOT_BASE + streetSlotId` with the variant digits cleared, and
+  the hall's `HALL_SLOT_BASE + that same entrance id + 50 + tile`;
+- the module names `ml_support`, `ml_concourse_arch` and `ml_concourse_hall`,
+  and the slot types of the same names. The concourse rename of 2026-10-26 is
+  the last one that costs nothing;
 - the construction param list, which is deliberately **empty** - stored values
   come back as 1-based indices into `values`, so adding a param later changes
   the meaning of every station already built.
@@ -561,7 +647,8 @@ that can serve both.
 
 ### Step 1 - catchment and capacity *(done 2026-10-09, awaiting a run)*
 
-- Slot type `ml_concourse`, id `800e6 + streetSlotId` with the variant digits
+- Slot type `ml_concourse_arch` (`ml_concourse` until the pair of 2026-10-26),
+  id `800e6 + streetSlotId` with the variant digits
   cleared. One slot per **entrance**, derived from the street family's entrance
   slots the way support slots are derived from rail's - so a second entrance
   gets a second concourse for free. Clearing the variant digits matters: the
@@ -582,13 +669,21 @@ The work happens in `finish`, not in the module's `updateFn`, and that is
 forced: a module runs in stage 2, and the station records are assembled by the
 two families' hooks in stage 3. The module declares; the script applies.
 
-### Step 2 - anchor the pedestrian link *(blocked on a decision)*
+### Step 2 - anchor the pedestrian link *(written 2026-10-26, unrun)*
 
-`linkLevels` currently searches for the closest pair of person nodes in plan,
-ignoring z, and in a real session picked a lower endpoint at **z = 5.0** -
-passengers stepping off five metres up. With a concourse present the link should
-start at the concourse's slot instead, which makes it deterministic and puts it
-where the stairs art will be. Keep the vehicle-node refusal.
+**Done, as part of item 0 of the release list.** `linkLevels` draws one lane per
+placed concourse module of either variant, anchored at that module's cell, with
+the vehicle-node refusal and the duplicate-edge guard both kept and the second
+one now also applied between our own lanes. A station with no concourse keeps
+the unanchored lane this section was written about.
+
+What the section said when it was still a question, because the reasoning is
+what justifies the shape: `linkLevels` searched for the closest pair of person
+nodes in plan, ignoring z, and in a real session picked a lower endpoint at
+**z = 5.0** - passengers stepping off five metres up. With a concourse present
+the link should start at the concourse's slot instead, which makes it
+deterministic and puts it where the stairs art will be. Keep the vehicle-node
+refusal.
 
 **First decide whether the link stays at all.** The interchange works in both
 directions and passengers **teleport** between the levels rather than walking

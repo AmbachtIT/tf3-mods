@@ -19,6 +19,15 @@
 -- the same stock? `catchmentAreaSystem.getStationCatchables(station, true)`
 -- is the engine's own answer, per station, for cargo.
 --
+-- Round three, 2026-10-23: **why does the rail level's tab read `Tram
+-- station`?** The entity window labels a tab by walking the station group's
+-- `getCarriers` with no `break`, so the last carrier wins, and today's log
+-- says the rail group has two carriers where the street group has one. The
+-- names were never printed, only the count, which is why this was still open.
+-- So it now prints carriers and transport modes **by name and in order**, and
+-- asks per terminal as well as per group, because a label that is wrong is a
+-- question about which terminal is responsible.
+--
 -- Everything here is read-only, and every engine call is wrapped: a probe that
 -- crashes the session teaches nothing.
 --
@@ -138,6 +147,45 @@ local function enumName(enumTable, value)
 	end)
 	if ok and name ~= nil then return name end
 	return tostring(value)
+end
+
+--- The table behind an enum name, whichever way this build exposes it.
+---
+--- `make_entity_window.tl` reads `api.type["enum"].Carrier` - the subscript is
+--- because `enum` is a Teal keyword, not because the path is unusual - while
+--- the problem enums above sit directly on `api.type`. Try both rather than
+--- betting on one.
+local function enumTable(name)
+	local viaEnum = api.type ~= nil and api.type["enum"] ~= nil
+		and api.type["enum"][name] or nil
+	if viaEnum ~= nil then return viaEnum end
+	return (api.type ~= nil and api.type[name]) or {}
+end
+
+--- Enum values as names, **in order**.
+---
+--- Order is the whole point for carriers:
+--- `getSubconstructionDescriptionAndSortKey` walks the list assigning a label
+--- per carrier with **no `break`**, so the *last* one wins and names the tab.
+--- A set would lose exactly the fact being chased. `ipairs` keeps the
+--- sequence; the `pairs` fallback is only for a container it will not walk.
+local function orderedNames(list, tbl)
+	local out = {}
+	if list == nil then return out end
+	for _, v in ipairs(list) do out[#out + 1] = enumName(tbl, v) end
+	if #out == 0 then
+		for _, v in pairs(list) do out[#out + 1] = enumName(tbl, v) end
+	end
+	return out
+end
+
+--- A `getCarriers` result as "carriers / modes", both in order.
+local function carrierNames(cm)
+	if cm == nil then return "ERROR", "ERROR" end
+	local cs = orderedNames(cm[1], enumTable("Carrier"))
+	local ms = orderedNames(cm[2], enumTable("TransportMode"))
+	return #cs > 0 and table.concat(cs, " -> ") or "none",
+		#ms > 0 and table.concat(ms, "+") or "none"
 end
 
 --- One stock, in full.
@@ -385,8 +433,9 @@ local function report()
 			.. " count above.")
 
 		-- What each group can carry, as the engine sees it. `getCarriers` with
-		-- station = -1 returns the superset over all terminals, which is the
-		-- quickest check that a group is known to handle both RAIL and ROAD.
+		-- station = -1 returns the superset over all terminals, which is both
+		-- the quickest check that a group handles what it should and the exact
+		-- list the entity window labels the tab from.
 		-- The engine's own complaints, which is what the red markers on a
 		-- line are. `getLineStationProblems` is reported per (line, station
 		-- group) pair, so it says *which stop* of which line is unhappy, and
@@ -424,10 +473,46 @@ local function report()
 			local lines = groupEntity ~= nil and try(
 				api.engine.system.lineSystem.getLinesForStationGroup,
 				groupEntity) or nil
-			say(string.format("  group %s: stations=%d carriers=%s lines=%d",
+			local cAll, mAll = carrierNames(carriers)
+			say(string.format("  group %s: stations=%d lines=%d;"
+				.. " carriers=%s; modes=%s",
 				g, sg ~= nil and count(sg.stations) or 0,
-				carriers ~= nil and tostring(count(carriers[1] or {})) or "?",
-				lines ~= nil and count(lines) or 0))
+				lines ~= nil and count(lines) or 0, cAll, mAll))
+
+			-- Which terminal brings each carrier.
+			--
+			-- The superset above is what the entity window reads, so it is
+			-- what decides the tab's label - but it cannot say *which*
+			-- terminal is responsible, and that is the whole question when a
+			-- label is wrong. `getCarriers` takes a station index and a
+			-- terminal index inside it (`system.d.tl:100-102`), both 0-based
+			-- with -1 as the "all" sentinel, so asking per terminal pins it.
+			--
+			-- The live case: the rail level's tab reads `Tram station`. Every
+			-- stock rail track template carries `TRAM_TRACK` as a transport
+			-- mode (`track/*/*.street_template.lua`), and if that alone were
+			-- enough every train station in the game would read the same - so
+			-- what to look for is a *vehicle* mode, `TRAM` or `ELECTRIC_TRAM`,
+			-- and which terminal has it.
+			for si, stationEntity in ipairs(sg ~= nil and sg.stations or {}) do
+				local sIdx = si - 1
+				local stComp = getComponent(stationEntity,
+					api.type.ComponentType.STATION)
+				local nTerm = stComp ~= nil and count(stComp.terminals) or 0
+				local cS, mS = carrierNames(try(
+					api.engine.system.stationGroupSystem.getCarriers,
+					groupEntity, sIdx, -1))
+				say(string.format("    station idx %d (entity %s):"
+					.. " %d terminal(s); carriers=%s; modes=%s",
+					sIdx, tostring(stationEntity), nTerm, cS, mS))
+				for ti = 0, nTerm - 1 do
+					local cT, mT = carrierNames(try(
+						api.engine.system.stationGroupSystem.getCarriers,
+						groupEntity, sIdx, ti))
+					say(string.format("      terminal %d: carriers=%s;"
+						.. " modes=%s", ti, cT, mT))
+				end
+			end
 
 			-- Per-stop detail for this group's lines: `noPath` and
 			-- `incompatibleStop` are flags the summaries do not carry.

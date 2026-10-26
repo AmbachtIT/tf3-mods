@@ -3648,8 +3648,458 @@ warehouse next door stays worth building.
 - T6 step 5 needs a walking observation: the numbers are right now, but nobody
   has watched a passenger cross.
 
+## The link is what carries them after all, and the teleport was a fallback
+
+Run of 2026-10-23, the first on the build that has `moveRailModelsToRail` in it.
+Observed in game: **passengers walk up through the concourse** and cross to the
+platforms by the rail station's own passenger crossings from there. Freight
+transfers as designed at `CONCOURSE_STOCK_CAPACITY = 100`. No warning or error
+from this mod anywhere in the session.
+
+That settles T6 step 5, and it settles it the other way from the way the plan
+was leaning. The log says why:
+
+    linked levels: street (-47.5,-13.8,0.3) -> rail (-47.5,-14.0,13.1),
+      a climb of 12.8 m, from 142 street and 2208 rail person nodes
+    person nodes: 142 street (z 0.0..0.3, 2 distinct, commonest 0.3 x104 /
+      0.0 x38), 2208 rail (z 5.0..13.1, 2 distinct, commonest 13.1 x1668 /
+      5.0 x540); 0 node(s) shared between the levels
+
+**Zero shared nodes, with the families now filed correctly.** The street level
+tops out at z = 0.3 and the rail level starts at 5.0, so there is no coincident
+node for the engine to weld and stock joins the two levels nowhere at all. The
+lane `linkLevels` draws is the only route across - and this time it ends
+somewhere a person can stand, which is the condition the shared-node report was
+written to check. So `linkLevels` **stays**, and `vehicleNodeKeys` stays with
+it: its refusal fired 11 times in this session, so the crash path it guards sees
+live traffic rather than theory.
+
+The earlier section titled "The interchange works, and our pedestrian link is
+not what carries it" is kept for its reasoning, but its title is false. It was
+written when the link joined rail to rail, when the lane really was carrying
+nothing.
+
+Both observations now fit one mechanism: the engine moves a transferring
+passenger with no walkable path by **teleporting** them, and walks them when a
+path exists. On 2026-10-22 there was no path and they teleported; on 2026-10-23
+there is one and they walk it.
+
+### What the dialog actually shows, and one wrong label
+
+Reported from the same session, and it corrects a claim this project had been
+repeating without ever looking: **the station presents as one named station.**
+Clicking either level opens a single dialog with a single name and three tabs:
+
+1. `Road station` - the grade level;
+2. `Tram station` - the rail level. **Wrong**, and it is the engine's label bug,
+   not ours: `getSubconstructionDescriptionAndSortKey` walks the group's
+   `getCarriers` with no `break`, so the last carrier wins. Why that group holds
+   a `TRAM` carrier is the open question, and it is now worth answering;
+3. `Warehouse` - the concourse's goods store, which means the warehouse marker
+   surfaces as a first-class tab of its own. The store is not just a log line.
+
+Two station groups and one visible name are not in conflict, because the entity
+window is assembled per **construction**, not per group - but exactly *how* the
+one name arises is unestablished, and worth leaving unestablished rather than
+guessing. The previous guess, that two groups must mean two names, was written
+down as fact and was wrong.
+
+## The `Tram station` label is vanilla's, and every rail station in the game has it
+
+2026-10-23. The label is the engine's, the mechanism is fully read, and the
+measurement is deployed but not yet run.
+
+**The label code, in full.** `gui/entity_window/make_entity_window.tl`,
+`getSubconstructionDescriptionAndSortKey`, extracted from
+`base/content/gui.zip`:
+
+```lua
+for __, carrier in ipairs(carriers) do
+    if carrier == api.type["enum"].Carrier.ROAD then
+        stationName = _("Road Station");  stationSortKey = stationSortKey + 100
+    elseif carrier == api.type["enum"].Carrier.RAIL then
+        stationName = _("Train Station"); stationSortKey = stationSortKey + 200
+    elseif carrier == api.type["enum"].Carrier.TRAM then
+        stationName = _("Tram Station");  stationSortKey = stationSortKey + 300
+    ...
+```
+
+No `break`, so **the last matching carrier names the tab**, and the sort key
+**accumulates** one addend per carrier. That second detail is what makes the
+observed tab order evidence rather than decoration. Base for a station is
+11000, a warehouse is 12500:
+
+| group | carriers | label | sort key |
+|---|---|---|---|
+| street | `ROAD` | Road station | 11100 |
+| rail | `RAIL` + `TRAM` | **Tram station** | 11500 |
+| concourse | - | Warehouse | 12500 |
+
+That is exactly the order seen in game - Road, Tram, Warehouse. The competing
+story, that the *street* group had picked up `TRAM`, predicts tabs of `Train
+station` (11200) then `Tram station` (11400) and **no** `Road station` tab at
+all, which is not what the dialog shows. So the `TRAM` is on the rail group.
+
+**And the log already said so.** Round two's own output, re-read rather than
+re-run:
+
+    group 26028: stations=1 carriers=1 lines=2
+    group 26029: stations=1 carriers=2 lines=2
+
+One carrier on one group, **two** on the other. The probe was printing
+`count(carriers[1])` and never the names, which is the only reason this stayed
+open - the measurement had been taken and thrown away.
+
+**Ruled out: our own `tramTrack`.** The merge passes `tramTrack = 1` into the
+street family. In stock that is *no tram*: `modular_terminal.script.lua` reads
+`params.tramTrack == 1 then cat = "_no_tram"`, and `modules.script.lua` builds
+tram geometry only `if constrParams.tramTrack > 1`. `TRAM` appears nowhere in
+this mod's content.
+
+**The raw material, and why it cannot be the whole answer.** Every stock rail
+track template carries a tram mode - rail track in TF3 *is* a street template,
+the two differ by `transportModes`:
+
+    track/standard/standard.street_template.lua
+        transportModes = { "TRAIN", "TRAM_TRACK", }
+    track/standard/standard_catenary.street_template.lua
+        transportModes = { "TRAIN", "ELECTRIC_TRAIN", "TRAM_TRACK",
+                           "ELECTRIC_TRAM_TRACK", }
+
+Same for `simple` and `high_speed`. But if `TRAM_TRACK` alone produced carrier
+`TRAM`, **every train station in the game would read `Tram station`**, and
+vanilla does not. So what to look for is a *vehicle* mode - `TRAM` or
+`ELECTRIC_TRAM`, which are separate enum entries from `TRAM_TRACK` - and which
+terminal carries it. `TerminalDef` has no carrier field of its own
+(`construction_util_serialized.d.tl:173-184`), so it comes from the edges a
+terminal references, which is where the merge could have put something odd.
+
+**What is deployed.** `getCarriers(stationGroup, station, terminal)` takes
+*indices*, 0-based, with `-1` as an "all" sentinel
+(`api/tealdef/api/engine/system.d.tl:100-102`) - so it can be asked **per
+terminal**, not just per group. The probe now prints carriers and transport
+modes by name and **in order** (order is the finding, given the missing
+`break`), for each group, each station index and each terminal. `Carrier` is
+`ROAD`, `RAIL`, `TRAM`, `OTHER`, `AIR`, `WATER` (`api/tealdef/api/type.d.tl:403-418`).
+
+One run answers it: whichever terminal reports a `TRAM` carrier, with its
+modes beside it, is the culprit.
+
+### Answered: it is `TRAM_TRACK`, and it is not ours
+
+Run of 2026-10-23. The enum names did not resolve - `api.type["enum"].Carrier`
+came back empty, so `enumName` fell through to `tostring` and printed raw
+values - but the declaration order in the tealdefs decodes them, and the street
+station is the control that proves the decoding:
+
+| group | station | terminals | carriers | modes |
+|---|---|---|---|---|
+| 26028 | 20844 | 6 | `0` = ROAD | `3+4` = BUS+TRUCK |
+| 26029 | 20810 | 7 | `1 -> 2` = **RAIL -> TRAM** | `7+14` = **TRAIN+TRAM_TRACK** |
+
+A bus station reporting carrier ROAD with modes BUS and TRUCK is exactly right,
+which is what makes the 0-based reading of both enums trustworthy
+(`Carrier` ROAD/RAIL/TRAM/OTHER/AIR/WATER, `TransportMode` PERSON/CARGO/CAR/
+BUS/TRUCK/TRAM/ELECTRIC_TRAM/TRAIN/ELECTRIC_TRAIN/...13=HELICOPTER/
+14=TRAM_TRACK/15=ELECTRIC_TRAM_TRACK).
+
+**There is no vehicle tram mode anywhere.** `TRAM` is 5 and `ELECTRIC_TRAM` is
+6, and neither appears. The only tram-ish mode present is `TRAM_TRACK`, 14 -
+which every rail track template carries. So the engine maps **`TRAM_TRACK` to
+`Carrier.TRAM`**, and the hypothesis that a *vehicle* mode had leaked in through
+the merge is dead.
+
+**All seven rail terminals report it identically**, and that uniformity is the
+proof it is not ours. A misfiled edge - the failure mode this mod has hit twice
+- would show up on one terminal or two, not on all seven with the same pair of
+modes. It is the track type, and the track type is stock.
+
+So: **every rail station in the game has carriers `RAIL -> TRAM`** and is
+labelled `Tram Station` by `getSubconstructionDescriptionAndSortKey`. Nobody
+sees it because a single-tab entity window does not render the subconstruction
+header at all - confirmed against a vanilla station in the same session. This
+mod has three tabs, so it renders the header, and a latent vanilla label bug
+becomes visible. Two independent things have to be true for it to show, and
+only one of them is ours.
+
+Note how close it came to never being noticed: the label loop has no `break`,
+so the **last** carrier wins. The order is `RAIL -> TRAM`. Reversed, it would
+read `Train station` and nothing would have looked wrong.
+
+**Not fixable from here, and not worth faking.** The carriers come from the
+terminals' edges, the edges' modes come from the track type, and every stock
+rail template - `simple`, `standard`, `high_speed`, catenary or not - includes
+`TRAM_TRACK`. `TerminalDef` has no mode or carrier field to override
+(`construction_util_serialized.d.tl:173-184`). The routes left are a custom
+track template without `TRAM_TRACK`, which would cost the player the track-type
+and upgrade tools this mod went to some trouble to support, or overriding the
+engine's GUI file, which would collide with every other mod that touches it.
+Both are worse than a wrong word. **Document it; report it upstream.**
+
+## The concourse becomes two modules, and one word still covers both
+
+2026-10-26, asked from the game before publishing: *"The concourse currently
+sits over the road entrance of the road station. I would like to add another
+concourse building that doesn't have the tunnel for the road but does have
+pedestrian connections. It should have the same footprint size as the concourse
+building so it can be placed next to a concourse building. We might also need to
+rethink terminology since I am not sure 'concourse' quite covers the bill."*
+
+Three questions went back, because each one changed the work, and the answers
+are what the build does:
+
+- **naming**: a variant pair under one word. `ml_concourse` is now
+  `ml_concourse_arch` and the new one is `ml_concourse_hall`, shown as
+  *Concourse - Road Arch* and *Concourse - Hall*. The rename of the first is
+  free exactly once - a slot type is a savegame key and nothing has been
+  published - so it happened now or never;
+- **what the hall carries**: everything the arch carries. Same 175 m catchment,
+  same +100 capacity, same share of the goods store, same price, and now the
+  same stairs. The two differ in their art and in the ground they are offered
+  on, and in nothing else;
+- **where it goes**: one cell per deck tile along the frontage.
+
+### Why the row works out, and what it rests on
+
+The arch's cell was already a deck tile - 40 m, `CONCOURSE_W = DECK_TILE`, from
+the widening of 2026-10-22 - and that is what makes the request cheap. A hall is
+that cell moved along the frontage by whole tiles, so the row lines up with the
+arch, with the supports and with the platform modules overhead, all three of
+which are on a 40 m pitch already.
+
+Two separate derivations, which is the part worth remembering:
+
+- the **frame** is the entrance's, as the arch's is. Cell `k` sits at the
+  entrance's local `x = k * CONCOURSE_W` by construction, so the row follows the
+  frontage in every orientation the street station emits and this code never
+  asks which way the station faces;
+- the **extent** is the deck's. Each occupied deck tile is projected onto that
+  same local x, rounded to the cell pitch, and the row spans the range those
+  projections cover. With the default seed - four tiles at `coordJ = -1..2`, so
+  construction x = -40, 0, 40, 80, and the entrance at x = 0 - the range is
+  `-1..+2`, tile 0 is the arch's, and the halls land under the other three
+  tiles exactly.
+
+The range is filled in rather than taken tile by tile, deliberately: a hall in
+the middle of a row would otherwise vanish the moment the platform above it was
+replaced, and only shortening the deck at its ends can orphan one now.
+
+Two cells are refused rather than offered: tile 0, which is the arch's, and any
+cell within a tile's width of another entrance's cell. Both for the same reason
+- a hall is solid, so a hall over a carriageway walls it off.
+
+### The ids, and the band that was being saved for this
+
+`900e6 + the entrance id with its variant digits cleared + 50 + tile`. A cleared
+street id ends in `00`, so the two digits the variant used to occupy carry the
+tile index, 50 being tile zero. The row can run from -49 to +49 - two kilometres
+of frontage either way, against a longest-ever station of a few hundred metres -
+and the top of the band is ~921e6, which keeps every slot id this mod invents
+under 2^31. That is what the id comment meant by "anything added later goes
+above 900e6"; the band is spent now, and a fourth layer has to re-do the
+arithmetic.
+
+Four places read "is this a concourse" as `slotId >= CONCOURSE_SLOT_BASE` and
+every one of them had to become a range test or a set membership test. They are
+worth knowing about together, because a fifth would be easy to miss: the orphan
+report's family names, `slotBox`'s cell substitution, the arch-over-its-entrance
+overlap exemption, and the module counters in the build line.
+
+### The pedestrian link is now one lane per concourse
+
+This closes `PLAN.md` Phase 10 step 2, which had been parked on a decision
+rather than on work - *"with a concourse present the link should start at the
+concourse's slot instead"*, blocked behind "first decide whether the link stays
+at all". That was settled in game on 2026-10-23: passengers walk it, and the two
+levels share no other node.
+
+`findLevelNodes` now returns the candidates and `nearestPair` chooses from them,
+once per placed concourse module of either variant, with the module's cell
+centre folded into the score as a squared plan distance - the same units as the
+pair's own separation, so no weighting constant had to be invented. Each lane
+drawn goes into the `joined` set both ways round before the next is chosen,
+which is what keeps two lanes off one pair of nodes: a second edge between two
+nodes is the `Duplicate edge error` that killed the game on 2026-10-22.
+
+One lane per concourse also made the search's cost matter for the first time.
+The 10-23 session counted **142 street and 2208 rail** person nodes, so one
+unrestricted closest-pair search is 313,000 iterations - affordable once per
+rebuild, not affordable six times on a path the engine re-runs while the player
+hovers a module. So an anchored search looks 60 m out first, then 120 m, then
+falls back to everything; the fallback is what keeps it correct, and the radii
+are a cost control with no bearing on the answer.
+
+What it buys is a frontage that works the way it looks. A 200 m row of halls
+with one staircase at whichever end the closest node pair happened to be would
+have every passenger in the station walking to that end. The unanchored fallback
+stays for a station with no concourse at all, so demolishing the last one does
+not stranded everyone already travelling.
+
+### The hall had no footway, and `linkable` is the whole mechanism
+
+The first run placed both variants and reported, with the volumes right:
+*"there are no pedestrian connections from the new concourse to the road next to
+it."*
+
+The cause is that **the arch never had any of its own either**. Its cell is the
+entrance's cell, so everything that connects an arch is stock geometry standing
+in the same place: the entrance module's street edge reaching out to the road
+(`modular_street_station/modules.script.lua:106-117`) and the perron pieces that
+ring the bus platforms. A hall stands a whole deck tile away from both, and what
+it had was a solid building with no walkable geometry at all. The module's own
+request - *"does have pedestrian connections"* - had been answered with the
+climb to the rail level and nothing at grade.
+
+What connects a construction's pedestrians to the road network is one flag.
+`laneutil.createLane(curves, modes, speed, width, linkable)` copies its last
+argument onto the lane (`scripts/construction/laneutil.lua`), and a person lane
+marked `linkable` is the one the engine will join to a street. Two sightings
+fix the idiom:
+
+- **town buildings**, which are the clearest shipped example and the only `lua`
+  in the install that passes the flag: one curve, named `entrance_linkable`,
+  `createLane(..., true)`, and that is the whole of how every house in a town
+  reaches the pavement (`buildings/townbuildingutil.lua:207`);
+- **the street station's own perron**, which declares it in the *model* instead:
+  `street/modular_street_station/models/pedestrian_era_a/straight.mdl` carries
+  `metadata.transportNetworkProvider.laneLists[1].linkable = true` with its two
+  nodes at `z = 0.3`. There are era_a/b/c sets of these pieces, 5 m at a time,
+  and they are where the station's grade nodes at `z 0.3` come from. So the
+  street station is linkable all the way round its platforms, and that is the
+  network a hall was failing to be part of.
+
+Our own interchange lanes pass `false`, and still should: they run between two
+nodes we chose and must not be re-pointed at a road.
+
+So `hallWalkways` gives each placed hall a small network in its cell's frame, at
+`CONCOURSE_WALK_Z = 0.3` to match the perron:
+
+- a **frontage** lane from the cell's left edge through its centre to its right
+  edge, as two curves rather than one, because `createLane` makes two nodes per
+  curve and a coincident node is the only thing that joins two lanes - the
+  centre has to *be* a node for anything to attach there. Adjacent halls meet at
+  a shared cell edge, so a row of them is one continuous footway for free, which
+  is what the row was for;
+- a **kerb** spur from the centre out to the cell's road-facing face, in a lane
+  list of its own with `linkable = true` - its own list because the flag is per
+  lane list, which is why stock gives it a curve of its own too;
+- a **grade link** from the centre to the nearest person node the station
+  already had, ending exactly on it, without which the footway is an island
+  reachable only from the road.
+
+The climb then starts at the cell centre rather than at whatever node happened
+to be nearest: the centre is in `lowNodes` before `nearestPair` runs and its own
+anchor scores it at zero. That is the node a stairs model will hang on, and it
+is what Phase 10 step 2 wanted from the anchor in the first place.
+
+The two refusals are the ones this file always applies to a person lane, and
+each is a crash rather than a tidiness rule: a node coincident with a **vehicle**
+lane node is fatal on the simulation thread, so every node is checked against
+`vehicleNodeKeys` and a curve with either end on one is dropped; and a second
+edge between two nodes is a duplicate edge, so every curve is checked against
+`joined` and registered in it. The arch gets no footway at all, deliberately -
+its cell holds the carriageway, so a footway across it would be laid over the
+road it spans.
+
+It works. From the game, the same day: *"The pedestrian paths are now there and
+are fully functional."* So `linkable` **is** honoured on a lane list added after
+both hooks have run, which was the one thing this design could not borrow from
+either stock pattern - a town building declares it in a module's return value, a
+perron piece declares it in a `.mdl`, and neither is available to a construction
+that only knows where its levels are once the hooks are done. That is now in the
+root `NOTES.md`, because it is not specific to this mod.
+
+The same run found the cost of the height, though: *"they do spawn little hills
+in the terrain the pedestrians have to climb."* 30 cm of hill per hall, which is
+what `CONCOURSE_WALK_Z` is. The connection the engine generates from a
+`linkable` lane is a real path edge, and a path edge pulls the terrain up to meet
+its ends, so a node 30 cm over open ground is a node the ground comes up to.
+
+The height went to grade for about an hour, and then came back with the geometry
+it should have had from the start: *"If the stock stations use 30cm to match the
+kerbs of streets, that's what we should use too. Can you include a 30cm tall
+walkway in the generated mesh?"* Which is the right way round. 0.3 is this
+game's street kerb and every piece of stock pedestrian geometry sits on it, so
+walking from a road onto a station is level; what the perron has and our lanes
+did not is **a kerb in the model**. So `concourseModels` now lays a 2 m walkway,
+30 cm tall, along the hall's road-facing face, and the footway runs down the
+middle of it with a metre either side. The cell is 6 m deep, so the building
+behind it is 4.
+
+Two details of that, both of them `concourseModels` comments as well: the
+walkway and the building meet on a shared plane, which is a hazard at a **cell
+boundary** - where two separately placed modules and their float error meet, the
+thing `SUPPORT_SEAM` buys off - and not inside one module's own mesh, where
+`stoneFill`'s courses already share planes by the dozen. And the walkway is
+taken out of the cell rather than added to it, because a module's geometry is
+present when the engine checks placement against the world and this cell is
+already as deep as the entrance road allows.
+
+What that does not settle is whether the terrain still rises where the engine's
+own path crosses the unaligned grass between the road and the kerb. If it does,
+the lever left is a terrain alignment face under the cell - which is stock's
+answer, and already an open question below, because a 40 m block on a slope has
+the same problem with or without a footway.
+
+### What is not verified
+
+Two of the three things this section was written to watch are now answered, by
+the run of 2026-10-26:
+
+1. ~~**is a hall slot offered at all?**~~ **Yes, first try.** The arch took four
+   sessions to become clickable (`CONCOURSE_FLANK`) and every one of those
+   failures was the engine filtering a reservation that overlapped a stock
+   rectangle at an entrance; the build line reads `0 of 72` filtered, so the
+   inference held - out along the frontage there is nothing to overlap, and the
+   cell can claim its whole 40 x 6 m;
+2. **does the engine refuse to place one beside a road?** Still open. The module
+   collision check is height-blind and runs after our hook - that is what makes
+   the cargo station building unplaceable - and a solid building beside a
+   carriageway is the same shape of problem. The footway makes this sharper
+   rather than softer: the kerb spur wants a road close to the cell's face;
+3. ~~**do two anchored lanes coexist?**~~ **Four do.** `linked levels:` reported
+   four lanes with four distinct street ends and no duplicate-edge crash, which
+   is the guard in `joined` doing its job.
+
+What is open in their place is whether a `linkable` lane list added **after the
+hooks** is joined to the street network at all - see the footway section above -
+and whether a passenger actually prefers the nearest concourse, which is a
+walk nobody has watched yet.
+
+One cosmetic consequence, measured on paper rather than seen: a support in the
+frontage platform column overlaps a hall by about 2.5 m in y, because the
+column spans `y = -17.5..-12.5` and the cell spans `-15..-21`. Both are solid
+stone, so the result is more stone rather than a hole, and the real art is what
+resolves it.
+
+
 ## Open questions
 
+- **Does a hall on a slope sit on the ground?** Open, 2026-10-26, and it is not
+  new with the footway - it is the oldest unasked question about this mod's
+  placeholder blocks. The construction anchors terrain with a 20 cm `LESS`
+  square and nothing else, so the frontage band is raw terrain: a 40 m solid
+  block and a footway at grade are both right on the flat and wrong on a slope.
+  Stock's answer is for the building module to flatten its own footprint - an
+  `EQUAL` face with `slopeLow` / `slopeHigh`, as the stock passenger building
+  does over its 11 x 10.5 m - which would need `finish` to keep our grade-level
+  faces instead of replacing the whole list with the anchor.
+- ~~Is a `linkable` person lane honoured when it is added after the hooks?~~
+  **Yes - answered 2026-10-26.** Both shipped examples declare the flag earlier
+  than we do, a town building in its module's return value and the street
+  station's perron inside a `.mdl`, whereas ours goes into
+  `subconstructions[1].laneLists` after both families' hooks. The engine links
+  it all the same: *"fully functional"*. In the root `NOTES.md` now.
+- ~~Is a concourse hall slot offered in game?~~ **Yes - answered 2026-10-26,
+  first run.** `0 of 72` of our slots filtered, a pip on every hall cell, and
+  the building places. The inference that a cell out on the frontage has no
+  stock rectangle to overlap was right.
+- **Will the engine place a solid building beside a road?** Open, 2026-10-26.
+  The module collision check is height-blind and runs after our hook, which is
+  what makes the cargo station building unplaceable, and a hall along a frontage
+  the player has already built a road down is the same shape of problem. If it
+  refuses, the fix is a cell that stops short of the kerb rather than anything
+  structural.
 - ~~Why can a support be placed and a concourse not?~~ **Position - answered
   2026-10-13.** The probe slot took the module and the real one never did, with
   nothing else differing between them. See "Round nine"; the fix is
@@ -3745,9 +4195,24 @@ warehouse next door stays worth building.
   uses `dependentSlots[platformId]` for the roof and addon.
 
 - ~~Do two station records in one construction join one StationGroup?~~
-  **Answered yes, 2026-10-09** - interchange works and costs nothing. See
-  "Settled: the two stations **do** join one StationGroup". The follow-on
-  question is narrower: why does the group report a `TRAM` carrier?
+  **Answered NO, 2026-10-22** - and the earlier "answered yes, 2026-10-09" was
+  an inference from a working interchange, which proves nothing. Measured with
+  `stationGroupSystem.getStationGroup`: two groups, one station each. See "Two
+  station groups, confirmed - and the wrong question". Interchange works anyway,
+  and - observed 2026-10-23 - the player still sees **one named station** with a
+  tab per subconstruction, so the split is invisible in the UI.
+- **Why does the rail station's group report a `TRAM` carrier?** Open, and
+  **live again as of 2026-10-23** - it is not cosmetic trivia any more, it is
+  the cause of a visibly wrong label: the rail level's tab in the entity window
+  reads `Tram station`. The engine's
+  `getSubconstructionDescriptionAndSortKey` walks `getCarriers` with no `break`,
+  so the last carrier wins. ~~Why does the group report a `TRAM` carrier?~~
+  **Answered 2026-10-23: `TRAM_TRACK`.** The engine maps that transport mode to
+  `Carrier.TRAM`, every stock rail track template carries it, and all seven of
+  our rail terminals report `TRAIN+TRAM_TRACK` identically - so every rail
+  station in the game has this label and only a multi-tab entity window renders
+  it. Vanilla's bug, not ours, and not fixable from here. See "The `Tram
+  station` label is vanilla's, and every rail station in the game has it".
 - Are the rail and street families' module/host field names really disjoint, so
   one merged result can host both? Reasoned from the scripts, not tested. See
   "Picking a transport type per level".
@@ -3768,13 +4233,14 @@ warehouse next door stays worth building.
   class - but an occupied support's reservation is clipped or zeroed, so the
   collider may be the only thing the bulldozer can find. One deploy and one
   click, and round seventeen's test is already written.
-- **Is the teleport a fallback for a missing path, or the only mechanism there
-  is?** Open, 2026-10-22, and it decides whether `linkLevels` stays. The control
-  was going to be one deploy with the link made inert - but the freight crash
-  has done half the work: the link was never connected to the lower level at
-  all, so every transfer any session has seen happened **without** it. What is
-  left to learn is whether a link that is now genuinely connected changes
-  anything. See "The freight platform crash".
+- ~~Is the teleport a fallback for a missing path, or the only mechanism there
+  is?~~ **A fallback - answered 2026-10-23.** With the link genuinely connected,
+  passengers **walk** it, up through the concourse and across by the rail
+  station's own crossings; on 2026-10-22, with no path, the same transfer
+  teleported. So `linkLevels` stays, and the control deploy with the link made
+  inert is not needed: zero shared person nodes says there is no other route for
+  an inert link to be compared against. See "The link is what carries them after
+  all, and the teleport was a fallback".
 - Does the engine reject construction geometry at z > 0 with no support beneath
   it? The roof at 5.5 m and the main buildings say no, but no stock construction
   puts a *track* up there.

@@ -64,18 +64,40 @@ local FALLBACK_YEAR = 1990
 
 --- Our own slot layers, declared up here because the module classifier below
 --- needs them. What each one is for is documented where it is built: supports
---- under "holding the elevated level up", the concourse under "the concourse".
+--- under "holding the elevated level up", the two concourses under "the
+--- concourse".
 ---
 --- **All of this is frozen at the first public release.** A slot id is a
 --- savegame key and a slot type is the string a third-party module matches on,
 --- so changing either orphans what players have built.
+---
+--- The concourse is **two** slot types as of 2026-10-26, and the rename of the
+--- first one happened at the same time for exactly that reason: `ml_concourse`
+--- had to say which of the two it was, and the only moment that rename is free
+--- is before the first publish. There is no save anywhere with the old string
+--- in it, so this is a rename and not a migration - and it is the last chance
+--- to have one.
 local SUPPORT_TYPE = "ml_support"
-local CONCOURSE_TYPE = "ml_concourse"
+local CONCOURSE_ARCH_TYPE = "ml_concourse_arch"
+local CONCOURSE_HALL_TYPE = "ml_concourse_hall"
 
---- The concourse module's own resource name, which `seedBothLevels` needs and
---- which is **frozen at the first public release** for the same reason the slot
---- type is: it is written into every savegame that has a station in it.
-local CONCOURSE_MODULE = "multi_layer_stations_1::/ml_concourse.module"
+--- Both concourse variants, as a set.
+---
+--- Read by everything that asks "is this a concourse" rather than "is this the
+--- one over the road": the catchment sweep, the capacity sweep, the goods store
+--- and the pedestrian link. The two modules declare the same numbers and get
+--- the same treatment - see `ml_concourse_hall.module.lua` - so every one of
+--- those four is a set membership test and not a branch.
+local CONCOURSE_TYPES = {
+	[CONCOURSE_ARCH_TYPE] = true,
+	[CONCOURSE_HALL_TYPE] = true,
+}
+
+--- The arch module's own resource name, which `seedBothLevels` needs and which
+--- is **frozen at the first public release** for the same reason the slot type
+--- is: it is written into every savegame that has a station in it. The hall is
+--- never seeded, so it needs no constant here.
+local CONCOURSE_ARCH_MODULE = "multi_layer_stations_1::/ml_concourse_arch.module"
 
 --- The id bases, and the arithmetic that keeps them from colliding - which is
 --- worth writing down, because the first choice of base for the concourse did
@@ -86,14 +108,32 @@ local CONCOURSE_MODULE = "multi_layer_stations_1::/ml_concourse.module"
 ---                rail slot ids reach ~10,817,100 (`passengerPlatformAddonSlotId`
 ---                = 10800000, plus 1000 * coordI + 10 * coordJ), so x10 + 9
 ---                takes supports up to ~708e6.
----     concourse  800e6 + streetSlotId with the variant digits cleared
+---     arch       800e6 + streetSlotId with the variant digits cleared
 ---                street slot ids are 200000 * (coordJ + 100) + 100 *
 ---                (coordI + 100) + variant, so ~21e6 at most: ~821e6.
+---     hall       900e6 + that same cleared entrance id + 50 + tile
+---                the hall layer is a **row** of cells along one entrance's
+---                frontage, so its id has to say which entrance and which
+---                cell. Clearing the variant leaves a street id ending in
+---                `00`, and those two digits are what the tile index goes
+---                in: tile 0 is the arch's own cell, so the row can run
+---                from -49 to +49 - two kilometres of frontage either side
+---                of an entrance, against a longest-ever station of a few
+---                hundred metres. The top of the range is ~921e6.
 ---
---- 800e6 therefore clears the top of the support range with ~92e6 to spare.
---- Anything added later goes **above** 900e6, or re-does this arithmetic.
+--- 800e6 therefore clears the top of the support range with ~92e6 to spare,
+--- and the hall layer takes the 900e6 band this comment used to reserve for
+--- "anything added later". Anything after it needs to re-do this arithmetic -
+--- and to stay under 2^31, which is what the whole scheme is really bounded
+--- by: every id here is an integer the engine round-trips through a savegame.
 local SUPPORT_SLOT_BASE = 600000000
-local CONCOURSE_SLOT_BASE = 800000000
+local ARCH_SLOT_BASE = 800000000
+local HALL_SLOT_BASE = 900000000
+
+--- Tile 0 of a hall row is the arch's cell, and the index is stored unsigned.
+--- 50 is the offset that makes that work; it is frozen with the ids.
+local HALL_TILE_ZERO = 50
+local HALL_TILE_MAX = 49
 
 --- The low water mark for "a slot this mod invented". Everything at or above it
 --- belongs to us and to neither stock family.
@@ -359,7 +399,7 @@ local function seedBothLevels(year)
 	-- added by default? If so, you may do that in the single location where I
 	-- can actually build it."* Correct, and it is now. The id is the entrance's
 	-- slot id with its variant digits cleared, which is exactly what
-	-- `addConcourseSlots` hands out for the entrance seeded above.
+	-- `addArchSlots` hands out for the entrance seeded above.
 	--
 	-- It was *un*seeded on 2026-10-12, in round six, when module removal broke
 	-- while a concourse was in the build. Round seven then found the real cause -
@@ -382,11 +422,11 @@ local function seedBothLevels(year)
 	--   it: the concourse went in last and nothing was deleted afterwards.
 	--
 	-- Deleting the one line below puts it back the way it was.
-	seeded[CONCOURSE_SLOT_BASE + streetMangle(55, 0, 0)] = CONCOURSE_MODULE
+	seeded[ARCH_SLOT_BASE + streetMangle(55, 0, 0)] = CONCOURSE_ARCH_MODULE
 
 	log.message(LOG .. "seeded: rail " .. tostring(tiles) .. " tiles ("
 		.. tostring(tiles * 40) .. " m, era " .. era .. ")"
-		.. " + 1 bus platform + entrance + 1 concourse, no station building"
+		.. " + 1 bus platform + entrance + 1 concourse arch, no station building"
 		.. " on either level")
 	return seeded
 end
@@ -1254,10 +1294,12 @@ local function addSupportSlots(result, railResult, xf, modules, allModules)
 	end
 	local orphans = 0
 	for slotId, _entry in pairs(allModules or {}) do
-		-- Support ids only: the concourse layer lives above `CONCOURSE_SLOT_BASE`
-		-- and is not derived from the rail level, so it is not orphaned by this.
+		-- Support ids only: both concourse layers live above `ARCH_SLOT_BASE`.
+		-- The arch is derived from an entrance rather than from the rail level,
+		-- so it is not orphaned by this; the hall rows **are** bounded by the
+		-- deck, and `addHallSlots` reports its own orphans for that reason.
 		if type(slotId) == "number" and slotId >= SUPPORT_SLOT_BASE
-			and slotId < CONCOURSE_SLOT_BASE and not have[slotId] then
+			and slotId < ARCH_SLOT_BASE and not have[slotId] then
 			orphans = orphans + 1
 		end
 	end
@@ -1574,6 +1616,65 @@ local CONCOURSE_W = DECK_TILE
 --- ends" means once the piers stay put.
 local CONCOURSE_SPAN = 24.0
 
+--- The hall's opening: none.
+---
+--- Zero is a real value here rather than a missing one - `concourseModels`
+--- reads it and fills the cell instead of standing two piers - and it is the
+--- only geometric difference between the two variants. Named so that the
+--- module entry point says what it means.
+local CONCOURSE_HALL_SPAN = 0.0
+
+--- How high a hall's own footway stands, in metres: a street kerb.
+---
+--- 0.3 is where every piece of stock pedestrian geometry is.
+--- `models/pedestrian_era_a/straight.mdl` - one 5 m piece of the perron that
+--- rings the bus platforms - declares
+--- `metadata.transportNetworkProvider.laneLists[1]` with both its nodes at
+--- `z = 0.3`, and so does the station's sidewalk, because that is the height of
+--- a street kerb in this game. Walking from a road onto a station is then
+--- level, which is the whole point.
+---
+--- This has been both values in one day, and the round trip is the useful part.
+--- It went to **grade** when the first run reported *"they do spawn little
+--- hills in the terrain the pedestrians have to climb"* - 30 cm of hill, one per
+--- hall, which is this constant exactly. The connection the engine generates
+--- from a `linkable` lane is a real path edge, and a path edge pulls the terrain
+--- up to meet its ends, so a node 30 cm over open ground is a node the ground
+--- comes up to.
+---
+--- It came back, with the geometry it should have had from the start: *"If the
+--- stock stations use 30cm to match the kerbs of streets, that's what we should
+--- use too. Can you include a 30cm tall walkway in the generated mesh?"* Which
+--- is the difference between ours and the perron's, and it was never the number
+--- - a perron node's 0.3 is **the top of a kerb the model carries**, and ours
+--- carried nothing. `concourseModels` now lays a `CONCOURSE_WALK_D` wide
+--- walkway this tall along the hall's road-facing face, and the footway rides
+--- on it.
+---
+--- So the lane and the stone agree, and the kerb the engine's path climbs is a
+--- kerb rather than a hillside. Whether that is enough to settle the terrain is
+--- a question for the run: if the ground still rises where the generated path
+--- crosses unaligned grass between the road and the kerb, the lever left is a
+--- terrain alignment face under the cell - stock's own answer, and an open
+--- question in `../NOTES.md` already, because a 40 m block on a slope has the
+--- same problem with or without a footway.
+local CONCOURSE_WALK_Z = 0.3
+
+--- How wide the hall's walkway is, in metres, measured in from its road-facing
+--- face.
+---
+--- 2 m of the cell's 6, which leaves a 4 m deep building. A pavement rather
+--- than a plaza: wide enough that the footway runs down the middle of it with a
+--- metre either side, narrow enough that the hall still reads as a building
+--- with a kerb in front of it instead of a kerb with a wall behind it.
+---
+--- Taken out of the cell, not added to it. Everything this module draws stays
+--- inside its own 40 x 6 m, collider included, for the reason `concourseModels`
+--- gives: the geometry is present when the engine checks placement against the
+--- world, and this cell is already as deep as the entrance road will allow
+--- (`CONCOURSE_D`).
+local CONCOURSE_WALK_D = 2.0
+
 --- 6 m deep, which is **not** a styling choice - it is the largest depth that
 --- keeps the concourse out of the road.
 ---
@@ -1670,8 +1771,22 @@ local ENTRANCE_SLOT_TYPES = {
 local CONCOURSE_FLANK = 11.0
 local CONCOURSE_FLANK_HALF = 1.0
 
---- The ground a concourse **occupies**, as four distances from its slot's
---- origin - which is not its centre.
+--- Where each variant's **cell centre** sits in its slot's own frame, along the
+--- slot's local x.
+---
+--- The arch's slot origin is out on the flank, because that is the only ground
+--- at an entrance the engine will offer, so everything that wants the middle of
+--- the building - the art, the catchment circle - has to undo that offset. A
+--- hall's origin *is* its cell centre, so its entry is zero. Two call sites
+--- read this, and before it existed they each carried `-CONCOURSE_FLANK` as a
+--- literal, which is not a number a second variant can share.
+local CONCOURSE_CELL_OFFSET = {
+	[CONCOURSE_ARCH_TYPE] = -CONCOURSE_FLANK,
+	[CONCOURSE_HALL_TYPE] = 0.0,
+}
+
+--- The ground an **arch** occupies, as four distances from its slot's origin -
+--- which is not its centre.
 ---
 --- Deliberately not the same thing as the slot's `spacing` any more: that is
 --- what the engine is told the slot claims (a 2 m band, all it will accept),
@@ -1680,13 +1795,16 @@ local CONCOURSE_FLANK_HALF = 1.0
 --- was written for, and `slotBox` reads the centre back out of the asymmetry,
 --- so the `CONCOURSE_FLANK` offset has to be in here too: left `11 + 12`,
 --- right `12 - 11`.
-local function concourseCell()
+---
+--- A hall needs no equivalent: its reservation already *is* its cell, which is
+--- the one simplification of being offered away from an entrance.
+local function archCell()
 	return { CONCOURSE_W * 0.5 + CONCOURSE_FLANK,
 		CONCOURSE_W * 0.5 - CONCOURSE_FLANK,
 		CONCOURSE_D * 0.5, CONCOURSE_D * 0.5 }
 end
 
-local function concourseSlot(id, entranceTransf)
+local function archSlot(id, entranceTransf)
 	return {
 		id = id,
 		-- The entrance's own frame, shifted along its local -y, which is the
@@ -1698,18 +1816,18 @@ local function concourseSlot(id, entranceTransf)
 			CONCOURSE_FLANK, -CONCOURSE_D * 0.5, 0.0))),
 		spacing = { CONCOURSE_FLANK_HALF, CONCOURSE_FLANK_HALF,
 			CONCOURSE_D * 0.5, CONCOURSE_D * 0.5 },
-		type = CONCOURSE_TYPE,
+		type = CONCOURSE_ARCH_TYPE,
 		replaceable = true,
 	}
 end
 
-local function addConcourseSlots(result, streetResult, modules, allModules)
+local function addArchSlots(result, streetResult, modules, allModules)
 	local seen = {}
 	local added = 0
 	for _i, slot in ipairs(streetResult.slots or {}) do
 		if ENTRANCE_SLOT_TYPES[slot.type] and slot.transf ~= nil
 			and modules[slot.id] ~= nil then
-			local id = CONCOURSE_SLOT_BASE + slot.id - (slot.id % 100)
+			local id = ARCH_SLOT_BASE + slot.id - (slot.id % 100)
 
 			-- The concourse belongs to its entrance, so it goes when the
 			-- entrance goes. Declared per occupied entrance variant, outside
@@ -1725,14 +1843,14 @@ local function addConcourseSlots(result, streetResult, modules, allModules)
 
 			if not seen[id] then
 				seen[id] = true
-				result.slots[#result.slots + 1] = concourseSlot(id, slot.transf)
+				result.slots[#result.slots + 1] = archSlot(id, slot.transf)
 				added = added + 1
 			end
 		end
 	end
 
 	result.slotConfig = result.slotConfig or {}
-	result.slotConfig[CONCOURSE_TYPE] = { skipCollisionCheck = true }
+	result.slotConfig[CONCOURSE_ARCH_TYPE] = { skipCollisionCheck = true }
 
 	-- Where each concourse cell actually is, in world coordinates, and how deep.
 	--
@@ -1750,7 +1868,7 @@ local function addConcourseSlots(result, streetResult, modules, allModules)
 	-- slot is gone and the entrance it derives from is the thing to look at.
 	local parts = {}
 	for _i, slot in ipairs(result.slots or {}) do
-		if slot.type == CONCOURSE_TYPE then
+		if slot.type == CONCOURSE_ARCH_TYPE then
 			-- Three numbers, because they are three different things now: where
 			-- the concourse stands, where the slot that offers it is, and how
 			-- much ground that slot claims. A reservation that is not 2x6, or a
@@ -1766,9 +1884,211 @@ local function addConcourseSlots(result, streetResult, modules, allModules)
 		end
 	end
 	if #parts > 0 then
-		log.message(LOG .. "concourse slots "
+		log.message(LOG .. "concourse arch slots "
 			.. string.format("%.0fx%.0f: ", CONCOURSE_W, CONCOURSE_D)
 			.. table.concat(parts, ", "))
+	end
+	return added
+end
+
+--- The hall row: one cell per deck tile along an entrance's frontage, in the
+--- same 40 x 6 m band as that entrance's arch.
+---
+--- Asked for from the game 2026-10-26: *"The concourse currently sits over the
+--- road entrance of the road station. I would like to add another concourse
+--- building that doesn't have the tunnel for the road but does have pedestrian
+--- connections. It should have the same footprint size as the concourse
+--- building so it can be placed next to a concourse building."* So the cell is
+--- the arch's cell, moved along the frontage by whole tiles - which is what
+--- makes a row of them line up with the arch, with the supports and with the
+--- platform modules overhead, all three of which are already on a 40 m pitch.
+---
+--- **Derived from the entrance, bounded by the deck.** Two different jobs, and
+--- it matters which does which:
+---
+---  * the *frame* is the entrance's, as the arch's is. The row therefore runs
+---    along the station frontage in every orientation the street station emits,
+---    without this code knowing which way the construction faces, and cell `k`
+---    of the row is at the entrance's local `x = k * CONCOURSE_W` by
+---    construction rather than by arithmetic;
+---  * the *extent* is the deck's. Each occupied deck tile is projected onto
+---    that same local x and rounded to the cell pitch, and the row spans the
+---    range those projections cover. A hall is a platform's length, so a
+---    frontage longer than the deck above it would be a wall with nothing
+---    behind it.
+---
+--- The range is filled in rather than taken tile by tile, and that is
+--- deliberate: the deck **cannot** cross the entrance road - the cell over it
+--- is withheld, which is the second half of T2's "extend the deck to the
+--- entrance" - so going tile by tile would leave a gap in the frontage exactly
+--- where the arch is meant to stand. It would also make a hall in the middle of
+--- a row vanish the moment the platform above it was replaced. As it is, only
+--- shortening the deck at its ends takes a hall's slot away.
+---
+--- Two cells are refused rather than offered:
+---
+---  * **tile 0**, which is the arch's own cell. A hall is solid, so putting one
+---    where a road passes through would wall off the carriageway;
+---  * **any cell within a tile's width of another entrance's cell**, for the
+---    same reason, measured in plan between cell centres. A second entrance 40
+---    m along the frontage keeps its arch and loses the hall that would have
+---    stood on it.
+---
+--- A cell can still be refused *by the engine* after all that, and the known
+--- case is a road the player has already built along the frontage: the module
+--- collision check is height-blind and runs after our hook (see the cargo
+--- station building in `../NOTES.md`), and a solid building beside a road is
+--- exactly the shape that trips it. That is one module refused, not a broken
+--- station, and it is in `TESTS.md` as a case to watch rather than something
+--- this code can prevent.
+local function addHallSlots(result, streetResult, railResult, xf, streetModules,
+		railModules, allModules)
+	-- The entrances, with the three variants collapsed onto one position - the
+	-- same key `addArchSlots` uses, so an entrance's arch and its halls carry
+	-- the same entrance id in two different bands. The variants are kept
+	-- because the removal cascade is declared per occupied variant.
+	local entrances, order = {}, {}
+	for _i, slot in ipairs(streetResult.slots or {}) do
+		if ENTRANCE_SLOT_TYPES[slot.type] and slot.transf ~= nil
+			and streetModules[slot.id] ~= nil then
+			local id = slot.id - (slot.id % 100)
+			if entrances[id] == nil then
+				entrances[id] = { transf = slot.transf, variants = {} }
+				order[#order + 1] = id
+			end
+			local v = entrances[id].variants
+			v[#v + 1] = slot.id
+		end
+	end
+
+	result.slotConfig = result.slotConfig or {}
+	result.slotConfig[CONCOURSE_HALL_TYPE] = { skipCollisionCheck = true }
+
+	-- Every occupied deck tile, as a centre in construction space.
+	local tiles = {}
+	for _i, slot in ipairs(railResult.slots or {}) do
+		if DECK_SLOT_TYPES[tostring(slot.type)] and slot.transf ~= nil
+			and railModules[slot.id] ~= nil then
+			tiles[#tiles + 1] = applyMat(transf.mul(xf, slot.transf),
+				{ 0.0, 0.0, 0.0 })
+		end
+	end
+
+	-- Each entrance's cell centre, which is what a hall cell has to stay clear
+	-- of. An arch's cell is centred on its entrance in local x - its slot is
+	-- not, which is `CONCOURSE_FLANK`'s whole story - and sits
+	-- `CONCOURSE_D * 0.5` back along the road, which is where the band is.
+	local blocked = {}
+	for _i, id in ipairs(order) do
+		blocked[#blocked + 1] = applyMat(entrances[id].transf,
+			{ 0.0, -CONCOURSE_D * 0.5, 0.0 })
+	end
+
+	local near = CONCOURSE_W - 1.0
+	local added, rows, placed = 0, {}, {}
+	for _i, id in ipairs(order) do
+		local t = entrances[id].transf
+		local o = applyMat(t, { 0.0, 0.0, 0.0 })
+		-- The entrance's own x axis, which is the direction the frontage runs
+		-- in. Already a unit vector: both families build their transforms out
+		-- of `rotZ` and `transl` alone.
+		local ux, uy = t[1], t[2]
+
+		local kMin, kMax = nil, nil
+		for _j, pt in ipairs(tiles) do
+			local along = (pt[1] - o[1]) * ux + (pt[2] - o[2]) * uy
+			local k = math.floor(along / CONCOURSE_W + 0.5)
+			if kMin == nil or k < kMin then kMin = k end
+			if kMax == nil or k > kMax then kMax = k end
+		end
+
+		local offered, withheld = 0, 0
+		for k = kMin or 0, kMax or -1 do
+			local centre = applyMat(t,
+				{ k * CONCOURSE_W, -CONCOURSE_D * 0.5, 0.0 })
+			-- Two entrances can generate rows that overlap in the world, and
+			-- two slots at one position would offer the player two buildings
+			-- in the same ground. First row wins; the key is the cell centre
+			-- to the metre, which is far finer than the 40 m pitch.
+			local key = string.format("%.0f|%.0f", centre[1], centre[2])
+			local keep = k ~= 0 and math.abs(k) <= HALL_TILE_MAX
+				and placed[key] == nil
+			if keep then
+				for _j, b in ipairs(blocked) do
+					local dx, dy = centre[1] - b[1], centre[2] - b[2]
+					if dx * dx + dy * dy < near * near then
+						keep = false
+						break
+					end
+				end
+			end
+
+			if keep then
+				local hallId = HALL_SLOT_BASE + id + HALL_TILE_ZERO + k
+				result.slots[#result.slots + 1] = {
+					id = hallId,
+					transf = transf.mul(t, transf.transl(vec3.new(
+						k * CONCOURSE_W, -CONCOURSE_D * 0.5, 0.0))),
+					-- The cell itself, unlike the arch's 2 m band. There is no
+					-- stock rectangle out here for the engine to filter the
+					-- reservation against, so the slot can claim the ground it
+					-- stands on and be clicked anywhere on it; whatever of that
+					-- ground the bus station occupies is taken back by
+					-- `clipEmptyOurSlots`, the same way a support's is.
+					spacing = { CONCOURSE_W * 0.5, CONCOURSE_W * 0.5,
+						CONCOURSE_D * 0.5, CONCOURSE_D * 0.5 },
+					type = CONCOURSE_HALL_TYPE,
+					replaceable = true,
+				}
+				placed[key] = hallId
+				-- A hall belongs to its entrance exactly as an arch does, so it
+				-- goes when the entrance goes. The engine's alternative is to
+				-- orphan the module and drop it with a warning.
+				for _j, variant in ipairs(entrances[id].variants) do
+					dependSlot(result, variant, hallId)
+				end
+				added = added + 1
+				offered = offered + 1
+			else
+				withheld = withheld + 1
+			end
+		end
+
+		if kMin ~= nil then
+			rows[#rows + 1] = string.format(
+				"%d tiles %+d..%+d: %d offered, %d withheld",
+				id, kMin, kMax, offered, withheld)
+		else
+			rows[#rows + 1] = string.format("%d no deck, so no row", id)
+		end
+	end
+
+	-- Halls whose cell is in no row any more, which means the deck shrank past
+	-- them. Reported here rather than in `addSupportSlots`' sweep, which
+	-- deliberately stops below `ARCH_SLOT_BASE`: the two layers are orphaned by
+	-- different things, and that sweep's "the level above them was removed" is
+	-- only half the story here - a hall also goes when its entrance does.
+	local have = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		have[slot.id] = true
+	end
+	local orphans = 0
+	for slotId, _entry in pairs(allModules or {}) do
+		if type(slotId) == "number" and slotId >= HALL_SLOT_BASE
+			and not have[slotId] then
+			orphans = orphans + 1
+		end
+	end
+	if orphans > 0 then
+		log.warning(LOG .. tostring(orphans) .. " concourse hall module(s) have"
+			.. " no slot any more - either the deck no longer reaches their cell"
+			.. " or their entrance is gone. The engine will drop them.")
+	end
+
+	if #rows > 0 then
+		log.message(LOG .. "concourse hall slots "
+			.. string.format("%.0fx%.0f: ", CONCOURSE_W, CONCOURSE_D)
+			.. table.concat(rows, "; "))
 	end
 	return added
 end
@@ -1793,11 +2113,19 @@ end
 --- The circle's position comes from the slot, exactly as the stock function
 --- does it, which is what makes a second concourse over a second entrance
 --- extend the catchment to where that entrance actually is - read back through
---- the slot's own frame, because the slot origin is out on the cell's flank
---- (`CONCOURSE_FLANK`) and the catchment belongs over the entrance it serves.
---- Through the frame rather than in world x, so a rotated or mirrored entrance
---- comes out right.
---- Capacity of the goods store a single concourse module provides.
+--- the slot's own frame, because an arch's slot origin is out on the cell's
+--- flank (`CONCOURSE_FLANK`) and the catchment belongs over the entrance it
+--- serves. Through the frame rather than in world x, so a rotated or mirrored
+--- entrance comes out right, and through `CONCOURSE_CELL_OFFSET` rather than
+--- through that constant, because a hall's origin is its own cell centre and
+--- undoing an offset it does not have would push its catchment 11 m sideways.
+---
+--- Both variants are swept, which is the whole of what "a hall is a concourse"
+--- means in code: same radius, same capacity, and a row of halls extends the
+--- catchment along the frontage the way a second entrance extends it sideways.
+--- Capacity of the goods store a single concourse module provides - either
+--- variant, since a hall declares the same numbers as an arch and is counted by
+--- the same sweep.
 ---
 --- A fifth of a warehouse tile's 500 at `loadSpeedModifier` 2.0
 --- (`warehouses/modules.script.lua:49`), and at half its load speed. The point
@@ -1806,6 +2134,11 @@ end
 --- a station should be a distribution centre. Two concourses make 200, which
 --- buffers a train's worth of one cargo and no more; anyone moving real volume
 --- should still want a real warehouse next door, and that stays worth building.
+---
+--- A long frontage therefore multiplies the store, and that is accepted rather
+--- than overlooked: a player who lines six halls up along a deck has built six
+--- buildings and paid for six, and 600 units is still a third of what one
+--- warehouse tile holds.
 ---
 --- Chosen over 250 when asked, 2026-10-22: "keep, but smaller".
 local CONCOURSE_STOCK_CAPACITY = 100
@@ -1853,7 +2186,7 @@ local function addConcourseStock(result, modules)
 	local n = 0
 	for _i, slot in ipairs(result.slots or {}) do
 		local entry = modules[slot.id]
-		if slot.type == CONCOURSE_TYPE and entry ~= nil and type(entry) == "table" then
+		if CONCOURSE_TYPES[slot.type] and entry ~= nil and type(entry) == "table" then
 			n = n + 1
 		end
 	end
@@ -1907,13 +2240,13 @@ local function applyConcourse(result, stations, modules)
 	local circles = {}
 	for _i, slot in ipairs(result.slots or {}) do
 		local entry = modules[slot.id]
-		if slot.type == CONCOURSE_TYPE and entry ~= nil and type(entry) == "table" then
+		if CONCOURSE_TYPES[slot.type] and entry ~= nil and type(entry) == "table" then
 			mine[slot.id] = entry
 			local catchment = entry.metadata and entry.metadata.catchmentPassenger
 			if catchment ~= nil and catchment.radius ~= nil and slot.transf ~= nil then
 				circles[#circles + 1] = {
 					position = applyMat(slot.transf,
-						{ -CONCOURSE_FLANK, 0.0, 0.0 }),
+						{ CONCOURSE_CELL_OFFSET[slot.type] or 0.0, 0.0, 0.0 }),
 					radius = catchment.radius,
 				}
 			end
@@ -2079,6 +2412,13 @@ end
 --- solid and finished on every face - so it lines up with whatever supports
 --- stand next to it.
 ---
+--- **Both variants are drawn from here**, and `span` is what tells them apart:
+--- 24 m of opening for the arch over its road, and zero for the hall, which
+--- fills its cell and is the piece a player puts either side of the arch. One
+--- function rather than two because they must agree exactly - same cell, same
+--- deck thickness, same stone, same seam - and two copies of this arithmetic
+--- would drift at the first change.
+---
 --- `cx` is where the cell's centre is **in the slot's own frame**, and it is not
 --- zero: the slot's origin is out on the flank, because that is the only ground
 --- at an entrance the engine will offer (`CONCOURSE_FLANK`), while the piers
@@ -2096,19 +2436,40 @@ local function concourseModels(width, depth, span, cx)
 	local deck = math.min(CONCOURSE_DECK, PITCH * 0.5)
 	cx = cx or 0.0
 
-	-- The piers flank the **road**, not the cell: they stand on the span's
-	-- edges, run the cell's full depth, and stop under the deck.
-	stoneFill(models, cx - hs, cx - hs + math.min(t, hs), -hd, hd,
-		0.0, PITCH - deck)
-	stoneFill(models, cx + hs - math.min(t, hs), cx + hs, -hd, hd,
-		0.0, PITCH - deck)
-	-- Whatever the cell has beyond the span is solid, full height, so the ends
-	-- read as the supports they are the size of and line up with the real ones
-	-- either side. With `span == width` there is nothing here and the piece is
-	-- what it was before 2026-10-22.
-	if hw > hs then
-		stoneFill(models, cx - hw, cx - hs, -hd, hd, 0.0, PITCH - deck)
-		stoneFill(models, cx + hs, cx + hw, -hd, hd, 0.0, PITCH - deck)
+	if hs <= 0.0 then
+		-- The hall: no opening, so no piers. What divides the cell instead is
+		-- the **walkway**, 30 cm of stone along the road-facing face with the
+		-- building standing behind it - which is what carries the footway's own
+		-- height, and is the one thing the perron pieces had that our lanes did
+		-- not (`CONCOURSE_WALK_Z`).
+		--
+		-- The cell's own -y is the road side, because the cell hangs off the
+		-- entrance's frame at `-CONCOURSE_D * 0.5`, away from the platforms.
+		--
+		-- These two fills meet on a shared plane, and that is fine here: a
+		-- shared plane is a hazard at a **cell boundary**, where two separately
+		-- placed modules and their float error meet, which is what
+		-- `SUPPORT_SEAM` buys off. Inside one module's own mesh the courses of
+		-- `stoneFill` already share planes by the dozen.
+		local walk = math.min(CONCOURSE_WALK_D, d)
+		stoneFill(models, cx - hw, cx + hw, -hd, -hd + walk,
+			0.0, CONCOURSE_WALK_Z)
+		stoneFill(models, cx - hw, cx + hw, -hd + walk, hd, 0.0, PITCH - deck)
+	else
+		-- The piers flank the **road**, not the cell: they stand on the span's
+		-- edges, run the cell's full depth, and stop under the deck.
+		stoneFill(models, cx - hs, cx - hs + math.min(t, hs), -hd, hd,
+			0.0, PITCH - deck)
+		stoneFill(models, cx + hs - math.min(t, hs), cx + hs, -hd, hd,
+			0.0, PITCH - deck)
+		-- Whatever the cell has beyond the span is solid, full height, so the
+		-- ends read as the supports they are the size of and line up with the
+		-- real ones either side. With `span == width` there is nothing here and
+		-- the piece is what it was before 2026-10-22.
+		if hw > hs then
+			stoneFill(models, cx - hw, cx - hs, -hd, hd, 0.0, PITCH - deck)
+			stoneFill(models, cx + hs, cx + hw, -hd, hd, 0.0, PITCH - deck)
+		end
 	end
 	-- The deck: the whole footprint, at the top, where it reads as a structure
 	-- crossing the road rather than a plug in it. This is the piece that shows
@@ -2142,8 +2503,10 @@ local function logOrphanModules(result, modules)
 			orphans = orphans + 1
 			if #names < 6 then
 				local family = "street"
-				if id >= CONCOURSE_SLOT_BASE then
-					family = "ours/concourse"
+				if id >= HALL_SLOT_BASE then
+					family = "ours/concourse-hall"
+				elseif id >= ARCH_SLOT_BASE then
+					family = "ours/concourse-arch"
 				elseif id >= SUPPORT_SLOT_BASE then
 					family = "ours/support"
 				elseif id < 20000000 then
@@ -2763,9 +3126,13 @@ local function slotBox(slot, xf, family, original)
 		local cell = supportCells[slot.id]
 		if cell ~= nil then
 			sp = { cell[1] * 0.5, cell[1] * 0.5, cell[2] * 0.5, cell[2] * 0.5 }
-		elseif slot.id >= CONCOURSE_SLOT_BASE then
-			sp = concourseCell()
+		elseif slot.id >= ARCH_SLOT_BASE and slot.id < HALL_SLOT_BASE then
+			sp = archCell()
 		end
+		-- A hall needs no substitution: its reservation is its cell, so the
+		-- number already in `sp` is the one this pass wants. Taking the arch's
+		-- asymmetric cell for it instead would report the building 11 m from
+		-- where it stands.
 	end
 	local t = xf ~= nil and transf.mul(xf, slot.transf) or slot.transf
 	-- `spacing` is `{left, right, back, front}` from the slot origin, so the
@@ -2810,17 +3177,23 @@ local function describeBox(b)
 		b.id, b.family, tostring(b.type), b.cx, b.cy, b.cz, b.hw * 2, b.hd * 2)
 end
 
---- Is this pair a concourse and the entrance it was derived from?
+--- Is this pair an arch and the entrance it was derived from?
 ---
---- They overlap at grade **by design** - the concourse spans that entrance's
---- road, and its slot id is that entrance's with the variant digits cleared -
---- so counting the pair would mean the same-level count is never zero, and a
---- count that is never zero cannot report anything.
-local function concourseOverItsEntrance(a, b)
+--- They overlap at grade **by design** - the arch spans that entrance's road,
+--- and its slot id is that entrance's with the variant digits cleared - so
+--- counting the pair would mean the same-level count is never zero, and a count
+--- that is never zero cannot report anything.
+---
+--- The arch only. A hall is deliberately offered **off** every entrance, so a
+--- hall overlapping one is not by design and is exactly the kind of thing this
+--- diagnostic exists to shout about; the id test excludes it anyway, since the
+--- hall band carries a tile index in the digits this comparison expects to be
+--- zero.
+local function archOverItsEntrance(a, b)
 	local lo, hi = a.id, b.id
 	if lo > hi then lo, hi = hi, lo end
-	return hi >= CONCOURSE_SLOT_BASE and lo < OUR_SLOT_MIN
-		and hi - CONCOURSE_SLOT_BASE == lo - (lo % 100)
+	return hi >= ARCH_SLOT_BASE and hi < HALL_SLOT_BASE and lo < OUR_SLOT_MIN
+		and hi - ARCH_SLOT_BASE == lo - (lo % 100)
 end
 
 local function logSlotOverlaps(result, railSlots, xf, modules, original)
@@ -2854,7 +3227,7 @@ local function logSlotOverlaps(result, railSlots, xf, modules, original)
 	for i = 1, #boxes do
 		for j = i + 1, #boxes do
 			local a, b = boxes[i], boxes[j]
-			if boxesOverlap(a, b) and not concourseOverItsEntrance(a, b) then
+			if boxesOverlap(a, b) and not archOverItsEntrance(a, b) then
 				local dz = math.abs(a.cz - b.cz)
 				local level = dz < 1.0 and "same" or "cross"
 				if level == "same" then same = same + 1 else cross = cross + 1 end
@@ -2871,7 +3244,7 @@ local function logSlotOverlaps(result, railSlots, xf, modules, original)
 	for i = 1, #live do
 		for j = i + 1, #live do
 			local a, b = live[i], live[j]
-			if boxesOverlap(a, b) and not concourseOverItsEntrance(a, b) then
+			if boxesOverlap(a, b) and not archOverItsEntrance(a, b) then
 				reserved = reserved + 1
 				if examples.reserved == nil then
 					examples.reserved = describeBox(a) .. " vs " .. describeBox(b)
@@ -3367,15 +3740,20 @@ local function zSpread(nodes)
 		#top > 0 and table.concat(top, " / ") or "-")
 end
 
---- Pick one pedestrian node at grade and one on the elevated platform.
+--- Every pedestrian node a link may use, split by level, plus the edges that
+--- already join two of them.
 ---
 --- Derived from the assembled lane lists rather than from guessed coordinates:
 --- both families' person lanes come from their **models** via `addLaneLists`,
 --- which positions them with `lane.transf` and keeps the nodes model-local, so
 --- the real world positions are only knowable after the hooks have run.
 ---
---- Of the candidates at each level, take the pair that is closest together in
---- plan, so the stairs are as short and as central as possible.
+--- It used to choose the pair as well, and `nearestPair` now does that: with
+--- one lane per concourse there is one list of candidates and several choices
+--- made from it, and the diagnostics in here are about the candidates rather
+--- than about any one lane. Vehicle nodes are excluded here, once, for all of
+--- them - a PERSON node coincident with a vehicle node is the hard crash this
+--- whole section is careful about.
 local function findLevelNodes(result, dz)
 	local lowNodes, highNodes = {}, {}
 	local avoid = vehicleNodeKeys(result)
@@ -3512,12 +3890,54 @@ local function findLevelNodes(result, dz)
 			.. tostring(crossing) .. ", e.g. " .. tostring(crossingExample)
 			.. ". Not an interchange - see the shared-node count above")
 	end
+	return lowNodes, highNodes, joined
+end
+
+--- The nodes of one level within `r` of an anchor, in plan.
+---
+--- Purely a cost control, and the cost is real: a session on 2026-10-23
+--- reported **142 street and 2208 rail** person nodes, so one unrestricted pair
+--- search is 313,000 iterations - which was affordable when `linkLevels` ran it
+--- once, and is not now that it runs once per concourse module. Six halls and
+--- an arch would be two million iterations of a double loop, on a path the
+--- engine re-runs while the player **hovers** a module.
+---
+--- Correctness does not depend on the radius: `nearestPair` falls back to the
+--- whole list if a restricted search finds nothing, so this can only make the
+--- common case cheap, never make it wrong.
+local function nodesNear(nodes, anchor, r)
+	local out = {}
+	local r2 = r * r
+	for _i, p in ipairs(nodes) do
+		local dx, dy = p[1] - anchor[1], p[2] - anchor[2]
+		if dx * dx + dy * dy <= r2 then
+			out[#out + 1] = p
+		end
+	end
+	return out
+end
+
+--- How far from a concourse to look for its stairs, in metres, in order.
+---
+--- 60 m is the cell's own 40 m plus half a tile either side, which is where a
+--- building's own stairs ought to be; 120 m is three tiles, for a station whose
+--- walkable nodes are sparse. Past that the search goes wide and takes the
+--- whole station, which is what it always did.
+local ANCHOR_RADII = { 60.0, 120.0 }
+
+--- The closest usable pair in two candidate lists, biased toward `anchor`.
+local function pickPair(lowNodes, highNodes, joined, dz, anchor)
 	local best, bestLow, bestHigh, alreadyJoined, flat = nil, nil, nil, 0, 0
 	for _i, lo in ipairs(lowNodes) do
 		local loKey = nodeKey(lo)
+		local bias = 0.0
+		if anchor ~= nil then
+			local ax, ay = lo[1] - anchor[1], lo[2] - anchor[2]
+			bias = ax * ax + ay * ay
+		end
 		for _j, hi in ipairs(highNodes) do
 			local dx, dy = hi[1] - lo[1], hi[2] - lo[2]
-			local d = dx * dx + dy * dy
+			local d = dx * dx + dy * dy + bias
 			if best == nil or d < best then
 				if joined[loKey .. "|" .. nodeKey(hi)] then
 					alreadyJoined = alreadyJoined + 1
@@ -3532,6 +3952,55 @@ local function findLevelNodes(result, dz)
 			end
 		end
 	end
+	return bestLow, bestHigh, flat, alreadyJoined
+end
+
+--- The pair of person nodes one lane should join, nearest to `anchor`.
+---
+--- Split out of `findLevelNodes` on 2026-10-26, when the link stopped being one
+--- lane for the whole station and became one lane per concourse module. The
+--- selection is unchanged with `anchor == nil`, which is what a station with no
+--- concourse still gets: the closest pair in plan, anywhere on the structure.
+---
+--- The anchor is folded into the same score rather than used to pre-sort the
+--- candidates, and the units are why it is sound: both terms are squared plan
+--- distances in metres, so a pair 5 m from the building that climbs 30 m across
+--- scores 925 against 3604 for one 60 m away that climbs 2 m. Near the building
+--- wins, short still breaks ties, and nothing needs a weighting constant that
+--- would have to be guessed.
+---
+--- Tried near the anchor first and over everything afterwards, for the cost
+--- reason in `nodesNear`. The widening is what keeps it honest: a restricted
+--- search that finds no pair - because every candidate is already joined, or
+--- because a hall stands where nothing walks - is not allowed to be the answer.
+---
+--- The two refusals are the ones this function has always had, and they are not
+--- tidiness - each is a crash the engine does not survive:
+---
+---  * a pair an existing person lane already joins would be a **duplicate
+---    edge**, fatal at `TransportNetworkSystem.cpp:299`. That is why `joined`
+---    is passed in and why `linkLevels` writes each lane it draws back into it;
+---  * a pair that does not climb at least half the pitch is not an interchange
+---    at all, and with the families separated by tag it should not occur - so it
+---    is counted and reported rather than silently dropped.
+local function nearestPair(lowNodes, highNodes, joined, dz, anchor)
+	local lo, hi, flat, alreadyJoined = nil, nil, 0, 0
+	if anchor ~= nil then
+		for _i, r in ipairs(ANCHOR_RADII) do
+			local lows = nodesNear(lowNodes, anchor, r)
+			local highs = nodesNear(highNodes, anchor, r)
+			if #lows > 0 and #highs > 0 then
+				lo, hi, flat, alreadyJoined =
+					pickPair(lows, highs, joined, dz, anchor)
+				if lo ~= nil then break end
+			end
+		end
+	end
+	if lo == nil then
+		lo, hi, flat, alreadyJoined =
+			pickPair(lowNodes, highNodes, joined, dz, anchor)
+	end
+
 	if flat > 0 then
 		log.message(LOG .. "skipped " .. tostring(flat) .. " candidate pair(s)"
 			.. " that climbed less than " .. string.format("%.1f", dz * 0.5)
@@ -3545,45 +4014,281 @@ local function findLevelNodes(result, dz)
 			.. " duplicate edge, which the engine treats as fatal")
 	end
 
-	return bestLow, bestHigh, #lowNodes, #highNodes
+	return lo, hi
 end
 
---- Join the two levels' pedestrian networks with one lane.
+--- Where each placed concourse module wants its stairs, in construction space.
+---
+--- This is what closes `PLAN.md` Phase 10 step 2, which had been parked on a
+--- decision rather than on work: *"with a concourse present the link should
+--- start at the concourse's slot instead, which makes it deterministic and puts
+--- it where the stairs art will be"*, blocked behind "first decide whether the
+--- link stays at all". That was settled in game on 2026-10-23 - passengers walk
+--- it, and the levels share no other node - so the anchor is worth having.
+---
+--- Both variants anchor one, because both are the same building: a hall is
+--- where a player puts the rest of the frontage, and a frontage you cannot
+--- climb from would make the hall a decoration. It is also what the module was
+--- asked for - *"does have pedestrian connections"*.
+---
+--- Read off the cell centre rather than the slot origin, through
+--- `CONCOURSE_CELL_OFFSET`, for the same reason the catchment circle is: an
+--- arch's origin sits 11 m out on its flank.
+local function concourseAnchors(result, modules)
+	local anchors = {}
+	for _i, slot in ipairs(result.slots or {}) do
+		local entry = (modules or {})[slot.id]
+		if CONCOURSE_TYPES[slot.type] and entry ~= nil and slot.transf ~= nil then
+			anchors[#anchors + 1] = {
+				id = slot.id,
+				-- The type and the frame as well as the point, because
+				-- `hallWalkways` builds geometry in the cell's own axes and
+				-- only one of the two variants gets a footway.
+				type = slot.type,
+				transf = slot.transf,
+				p = applyMat(slot.transf,
+					{ CONCOURSE_CELL_OFFSET[slot.type] or 0.0, 0.0, 0.0 }),
+			}
+		end
+	end
+	return anchors
+end
+
+--- A hall's own footway, and the pedestrian connection the module was asked
+--- for.
+---
+--- Reported from the game on 2026-10-26, with both variants placed and their
+--- volumes right: *"there are no pedestrian connections from the new concourse
+--- to the road next to it."*
+---
+--- The reason is that **the arch never had any of its own**. Its cell is the
+--- entrance's cell, so everything that connects it is stock geometry standing
+--- in the same place: the entrance module's street edge reaching out to the
+--- road (`modular_street_station/modules.script.lua:106-117`), and the perron
+--- pieces ringing the platforms, whose *models* carry person lanes marked
+--- `linkable`. A hall is a whole deck tile along the frontage from any of that,
+--- and what it had was a solid building with no walkable geometry at all.
+---
+--- `linkable` is the entire mechanism, and it is one flag.
+--- `laneutil.createLane(curves, modes, speed, width, linkable)` copies it onto
+--- the lane (`scripts/construction/laneutil.lua`), and a linkable person lane
+--- is the one the engine will join to the street network. The clearest shipped
+--- example is a town building: one curve, named `entrance_linkable`, built with
+--- `createLane(..., true)`, and that is the whole of how every house in a town
+--- reaches the pavement (`buildings/townbuildingutil.lua:207` - the only `lua`
+--- in the install that passes it, the rest being declared inside `.mdl` files).
+--- Our interchange lanes pass `false`, and still should: they run between two
+--- nodes we chose and must not be re-pointed at a road.
+---
+--- So each placed hall gets a small network of its own, in its cell's frame, on
+--- the walkway `concourseModels` lays along its road-facing face - see
+--- `CONCOURSE_WALK_Z`, which is a street kerb's 30 cm and needs that stone
+--- under it:
+---
+---  * a **frontage** lane from the cell's left edge through its centre to its
+---    right edge. Two curves rather than one, because `createLane` makes two
+---    nodes per curve and a coincident node is the only thing that joins two
+---    lanes - the centre has to *be* a node for anything to attach there.
+---    Adjacent halls meet at a shared cell edge, so a row of them is one
+---    continuous footway for free, and that is what the row was for;
+---  * a **kerb** spur from the centre out to the cell's road-facing face, in a
+---    lane list of its own with `linkable = true`. Its own list because the
+---    flag is per lane list - which is why stock gives it a curve of its own
+---    too;
+---  * a **grade link** from the centre to the nearest person node the station
+---    already had, ending exactly on it. Both ends are at kerb height, so it is
+---    level by construction. Without this curve a hall's footway is an island
+---    reachable only from the road, since lanes join at coincident nodes and
+---    nowhere else (root `NOTES.md`).
+---
+--- The climb then starts at the cell centre instead of at whatever node
+--- happened to be nearest: the centre is in `lowNodes` by the time
+--- `nearestPair` runs, and the hall's own anchor scores it at zero. That is
+--- the node the stairs art will hang on.
+---
+--- Two refusals, both of them crashes rather than tidiness, and both already
+--- written down: a node coincident with a **vehicle** lane node is fatal on the
+--- simulation thread, so every node here is checked against `vehicleNodeKeys`
+--- and a curve with either end on one is dropped; and a second edge between two
+--- nodes is a duplicate edge, equally fatal, so every curve is checked against
+--- `joined` and registered in it.
+---
+--- The arch gets none of this, deliberately. Its cell holds the carriageway,
+--- so a footway across it would be laid over the road it spans - and it is
+--- already the one place on the frontage where the stock entrance has put a
+--- pedestrian connection of its own.
+local function hallWalkways(result, sub, anchors, joined, lowNodes)
+	local avoid = vehicleNodeKeys(result)
+	-- The station's own grade nodes, before any of ours join the list: a hall
+	-- links to the station, whichever order the halls are visited in.
+	local grade = {}
+	for i = 1, #lowNodes do grade[i] = lowNodes[i] end
+
+	local halls, lanes, refused, lines = 0, 0, 0, {}
+
+	local function addCurves(curves, linkable)
+		local usable = {}
+		for _i, c in ipairs(curves) do
+			local a, b = c[1], c[2]
+			local ka, kb = nodeKey(a), nodeKey(b)
+			if ka == kb or avoid[ka] or avoid[kb] or joined[ka .. "|" .. kb] then
+				refused = refused + 1
+			else
+				usable[#usable + 1] = {
+					{ a[1], a[2], a[3] }, { b[1], b[2], b[3] },
+				}
+				joined[ka .. "|" .. kb] = true
+				joined[kb .. "|" .. ka] = true
+			end
+		end
+		if #usable == 0 then return end
+		sub.laneLists[#sub.laneLists + 1] =
+			laneutil.createLane(usable, { "PERSON" }, 2, 2, linkable)
+		lanes = lanes + 1
+	end
+
+	for _i, a in ipairs(anchors) do
+		if a.type == CONCOURSE_HALL_TYPE and a.transf ~= nil then
+			local hw, hd = CONCOURSE_W * 0.5, CONCOURSE_D * 0.5
+			-- Down the middle of the walkway, not down the middle of the cell:
+			-- the frontage lane is on the 2 m of stone at the face, with a
+			-- metre either side of it, and the rest of the cell is the
+			-- building it runs past.
+			local wy = -hd + CONCOURSE_WALK_D * 0.5
+			local c = applyMat(a.transf, { 0.0, wy, CONCOURSE_WALK_Z })
+			local l = applyMat(a.transf, { -hw, wy, CONCOURSE_WALK_Z })
+			local r = applyMat(a.transf, { hw, wy, CONCOURSE_WALK_Z })
+			-- The kerb, on the cell's own edge: the cell hangs off the
+			-- entrance's frame at `-CONCOURSE_D * 0.5`, away from the platforms
+			-- and towards whatever the entrance is snapped to, so -y is the
+			-- road side and this node is the top of the kerb the engine's own
+			-- path has to climb.
+			local o = applyMat(a.transf, { 0.0, -hd, CONCOURSE_WALK_Z })
+
+			local g, gd = nil, nil
+			for _j, p in ipairs(grade) do
+				local dx, dy = p[1] - c[1], p[2] - c[2]
+				local d = dx * dx + dy * dy
+				if gd == nil or d < gd then g, gd = p, d end
+			end
+
+			addCurves({ { l, c }, { c, r } }, false)
+			addCurves({ { c, o } }, true)
+			if g ~= nil then addCurves({ { c, g } }, false) end
+
+			lowNodes[#lowNodes + 1] = c
+			halls = halls + 1
+			lines[#lines + 1] = string.format(
+				"%s centre (%.1f,%.1f,%.1f), kerb (%.1f,%.1f,%.1f) linkable,"
+				.. " grade link to (%.1f,%.1f,%.1f) %.1f m away",
+				tostring(a.id), c[1], c[2], c[3], o[1], o[2], o[3],
+				g and g[1] or 0.0, g and g[2] or 0.0, g and g[3] or 0.0,
+				gd and math.sqrt(gd) or -1.0)
+		end
+	end
+
+	if halls > 0 then
+		log.message(LOG .. "hall footways: " .. tostring(halls) .. " hall(s), "
+			.. tostring(lanes) .. " lane list(s), " .. tostring(refused)
+			.. " curve(s) refused; " .. table.concat(lines, "; ")
+			.. ". The kerb spur is the linkable one - that is what the engine"
+			.. " joins to the street network, the way it joins a town"
+			.. " building's door to the pavement. The rest joins only where"
+			.. " nodes coincide")
+	end
+end
+
+--- Join the two levels' pedestrian networks: one lane per concourse module, or
+--- one lane for the station when it has no concourse at all.
 ---
 --- Without this there is **no path between the levels at all**: the street
 --- station's person lanes are at grade, the rail station's at +12, and nothing
 --- spans the gap. Passengers then never board the feeder bus either, because a
 --- journey is only taken when the whole route exists - which reads as the
---- station being ignored rather than broken.
+--- station being ignored rather than broken. Measured 2026-10-23: `0 node(s)
+--- shared between the levels`, with both families filed correctly, so stock
+--- joins them nowhere and these lanes are the only route across.
 ---
---- Deliberately a single two-point curve. Lanes join where their nodes
---- **coincide**, so the two ends are placed exactly on existing person nodes and
---- there are no intermediate nodes - an intermediate node is what would risk
---- landing on a vehicle lane, and a PERSON-to-BUS junction crashes the game
---- (root NOTES.md). It is a bare diagonal for now; a stairs model can be hung
---- on it once the routing is confirmed.
-local function linkLevels(result, dz)
-	local lo, hi, nLow, nHigh = findLevelNodes(result, dz)
-	if lo == nil or hi == nil then
-		log.warning(LOG .. "no pedestrian link possible: " .. tostring(nLow)
-			.. " person nodes at grade, " .. tostring(nHigh) .. " above")
-		return
-	end
+--- One lane per concourse as of 2026-10-26, where it used to be exactly one for
+--- the whole station. What that buys is a frontage that works the way it looks:
+--- a row of halls 200 m long had one staircase at whichever end the closest
+--- pair of nodes happened to be, and every passenger in the station walked to
+--- it. Now each building has its own.
+---
+--- The unanchored fallback stays, and deliberately: a station whose concourse
+--- has been demolished keeps its link rather than silently stranding everyone
+--- who is already travelling. It is the same lane this function drew before
+--- there was anything to anchor to.
+---
+--- Deliberately two-point curves. Lanes join where their nodes **coincide**, so
+--- each end is placed exactly on an existing person node and there are no
+--- intermediate nodes - an intermediate node is what would risk landing on a
+--- vehicle lane, and a PERSON-to-BUS junction crashes the game (root
+--- NOTES.md). `findLevelNodes` is what keeps vehicle nodes out of the
+--- candidates; `joined` is what keeps two lanes off one pair of nodes, and each
+--- lane drawn here goes into it both ways round before the next one is chosen.
+--- They are bare diagonals for now; a stairs model can be hung on them once the
+--- art is more than a placeholder.
+local function linkLevels(result, dz, modules)
+	local lowNodes, highNodes, joined = findLevelNodes(result, dz)
 
 	local sub = result.subconstructions[1]
 	if sub == nil then return end
 	sub.laneLists = sub.laneLists or {}
-	sub.laneLists[#sub.laneLists + 1] = laneutil.createLane(
-		{ { { lo[1], lo[2], lo[3] }, { hi[1], hi[2], hi[3] } } },
-		{ "PERSON" }, 2, 2, false)
 
-	log.message(LOG .. "linked levels: street (" .. string.format("%.1f,%.1f,%.1f", lo[1], lo[2], lo[3])
-		.. ") -> rail (" .. string.format("%.1f,%.1f,%.1f", hi[1], hi[2], hi[3])
-		.. "), a climb of " .. string.format("%.1f", hi[3] - lo[3])
-		.. " m, from " .. tostring(nLow) .. " street and " .. tostring(nHigh)
-		.. " rail person nodes. The ends are chosen by subconstruction tag, not"
-		.. " by height: a lifted platform addon hangs at z = 5 and used to"
-		.. " count as grade")
+	-- `false` rather than an empty list, so the loop body is the same for the
+	-- anchored and the unanchored case and there is only one place that draws a
+	-- lane.
+	local anchors = concourseAnchors(result, modules)
+	-- Before the climbs are chosen, not after: a hall's footway puts its cell
+	-- centre into `lowNodes`, and that is the node its own climb should start
+	-- at.
+	hallWalkways(result, sub, anchors, joined, lowNodes)
+	if #anchors == 0 then anchors = { false } end
+
+	local links, lines, failed = 0, {}, {}
+	for _i, a in ipairs(anchors) do
+		local lo, hi = nearestPair(lowNodes, highNodes, joined, dz,
+			a and a.p or nil)
+		if lo == nil or hi == nil then
+			-- Collected rather than warned about here: `updateFn` runs on every
+			-- hover frame, and a station with no walkable upper level would
+			-- otherwise put one warning per concourse into the log several
+			-- times a second.
+			failed[#failed + 1] = a and tostring(a.id) or "unanchored"
+		else
+			sub.laneLists[#sub.laneLists + 1] = laneutil.createLane(
+				{ { { lo[1], lo[2], lo[3] }, { hi[1], hi[2], hi[3] } } },
+				{ "PERSON" }, 2, 2, false)
+			-- Both ways round, matching `personEdgeKeys`, so the next anchor
+			-- cannot choose this pair again.
+			local loKey, hiKey = nodeKey(lo), nodeKey(hi)
+			joined[loKey .. "|" .. hiKey] = true
+			joined[hiKey .. "|" .. loKey] = true
+			links = links + 1
+			lines[#lines + 1] = string.format(
+				"%s street (%.1f,%.1f,%.1f) -> rail (%.1f,%.1f,%.1f), a climb"
+				.. " of %.1f m",
+				a and tostring(a.id) or "unanchored",
+				lo[1], lo[2], lo[3], hi[1], hi[2], hi[3], hi[3] - lo[3])
+		end
+	end
+
+	if #failed > 0 then
+		log.warning(LOG .. "no pedestrian link possible for "
+			.. tostring(#failed) .. " of " .. tostring(#anchors)
+			.. " concourse(s) (" .. table.concat(failed, ", ") .. "): "
+			.. tostring(#lowNodes) .. " person nodes at grade, "
+			.. tostring(#highNodes) .. " above")
+	end
+
+	if #lines > 0 then
+		log.message(LOG .. "linked levels: " .. tostring(links) .. " lane(s), "
+			.. table.concat(lines, "; ") .. ", from " .. tostring(#lowNodes)
+			.. " street and " .. tostring(#highNodes) .. " rail person nodes."
+			.. " The ends are chosen by subconstruction tag, not by height: a"
+			.. " lifted platform addon hangs at z = 5 and used to count as grade")
+	end
 end
 
 --- Final tidy-up after both hooks. The lists are already shared, so there is
@@ -3837,15 +4542,16 @@ return {
 		return supportModels(5.0, DECK_TILE)
 	end,
 
-	--- The concourse's geometry. Placeholder art - see `concourseModels`.
+	--- The arch's geometry. Placeholder art - see `concourseModels`.
 	---
 	--- The catchment and capacity this module exists for are **not** applied
 	--- here: a module's `updateFn` runs in stage 2, and the station records it
 	--- has to write into are assembled by the two families' hooks in stage 3.
 	--- So the module declares the numbers in its own `metadata` and
 	--- `applyConcourse` reads them back out after the hooks. Same reason the
-	--- pedestrian link cannot live here either.
-	concourseUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
+	--- pedestrian link cannot live here either - and the same reason both
+	--- variants need nothing here but their art.
+	archUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
 		for _i, m in ipairs(concourseModels(CONCOURSE_W, CONCOURSE_D,
 				CONCOURSE_SPAN, -CONCOURSE_FLANK)) do
 			addModel(m.id, m.transf, tag, result.models)
@@ -3853,10 +4559,32 @@ return {
 	end,
 
 	--- The placement preview, offset exactly like the real thing so that what
-	--- the cursor drags is where the concourse lands.
-	concourseGetModelsFn = function(captureParams, params)
+	--- the cursor drags is where the arch lands.
+	archGetModelsFn = function(captureParams, params)
 		return concourseModels(CONCOURSE_W, CONCOURSE_D, CONCOURSE_SPAN,
 			-CONCOURSE_FLANK)
+	end,
+
+	--- The hall's geometry: the same cell with no road through it.
+	---
+	--- No `cx` offset, unlike the arch: a hall's slot origin is its own cell
+	--- centre, because out along the frontage there is no stock rectangle to
+	--- dodge and the slot can hold the ground it stands on. That is the one
+	--- place the two variants' numbers differ, and `CONCOURSE_CELL_OFFSET` is
+	--- where it is written down for the code that needs both.
+	hallUpdateFn = function(captureParams, result, transform, tag, slotId, addModel, constrParams)
+		for _i, m in ipairs(concourseModels(CONCOURSE_W, CONCOURSE_D,
+				CONCOURSE_HALL_SPAN, 0.0)) do
+			addModel(m.id, m.transf, tag, result.models)
+		end
+	end,
+
+	--- The hall's placement preview. The cursor carries the whole cell, which
+	--- is what it will fill - a hall has no slot-context problem of the kind
+	--- `supportGetModelsFn` describes, because every hall cell is a deck tile.
+	hallGetModelsFn = function(captureParams, params)
+		return concourseModels(CONCOURSE_W, CONCOURSE_D, CONCOURSE_HALL_SPAN,
+			0.0)
 	end,
 
 	--- What happens to `params.modules` when the player adds or removes one
@@ -4053,13 +4781,18 @@ return {
 		-- counts across hovers. A delete preview must show one fewer than the
 		-- rebuild before it; if it does not, the edit is not reaching
 		-- `updateFn` and the fault is in `preProcessFn`, not in the geometry.
-		local nRail, nStreet, nSupport, nConcourse = 0, 0, 0, 0
+		local nRail, nStreet, nSupport, nArch, nHall = 0, 0, 0, 0, 0
 		for _k, _v in pairs(railModules) do nRail = nRail + 1 end
 		for _k, _v in pairs(streetModules) do nStreet = nStreet + 1 end
 		for slotId, _v in pairs(params.modules or {}) do
 			if type(slotId) == "number" then
-				if slotId >= CONCOURSE_SLOT_BASE then
-					nConcourse = nConcourse + 1
+				-- Counted by id band, highest first, because the bands are
+				-- contiguous and an arch read as a hall would be invisible in
+				-- a log that only ever showed one total.
+				if slotId >= HALL_SLOT_BASE then
+					nHall = nHall + 1
+				elseif slotId >= ARCH_SLOT_BASE then
+					nArch = nArch + 1
 				elseif slotId >= SUPPORT_SLOT_BASE then
 					nSupport = nSupport + 1
 				end
@@ -4093,8 +4826,15 @@ return {
 		-- Must be before the module pass, which the engine runs off `slots`.
 		local supports = addSupportSlots(result, railResult, RAIL_XF, railModules,
 			params.modules)
-		local concourses = addConcourseSlots(result, streetResult, streetModules,
+		local arches = addArchSlots(result, streetResult, streetModules,
 			params.modules)
+		-- After the arch's, and reading **both** families: a hall row takes its
+		-- frame from the entrance and its extent from the deck. Order does not
+		-- matter against the arch - the two layers never contend for a cell,
+		-- which is what withholding tile 0 is for - but it is where a reader
+		-- expects it.
+		local halls = addHallSlots(result, streetResult, railResult, RAIL_XF,
+			streetModules, railModules, params.modules)
 		-- Must be after `addSupportSlots`, which sizes supports from the rail
 		-- slots' reservations, and before the diagnostic, which takes the
 		-- originals so it can still report what the modules occupy.
@@ -4147,7 +4887,7 @@ return {
 			finish(result, streetResult, railResult, params.modules)
 			-- After finish: it is what re-reads both families' subconstructions,
 			-- so this is the first point at which every lane list exists.
-			linkLevels(result, PITCH)
+			linkLevels(result, PITCH, params.modules)
 
 			local stations = 0
 			for _i, sub in ipairs(result.subconstructions or {}) do
@@ -4160,9 +4900,11 @@ return {
 			log.message(LOG .. "built: modules rail=" .. tostring(nRail)
 				.. " street=" .. tostring(nStreet)
 				.. " support=" .. tostring(nSupport)
-				.. " concourse=" .. tostring(nConcourse) .. "; "
+				.. " arch=" .. tostring(nArch)
+				.. " hall=" .. tostring(nHall) .. "; "
 				.. tostring(supports) .. " support slots, "
-				.. tostring(concourses) .. " concourse slots, "
+				.. tostring(arches) .. " arch slots, "
+				.. tostring(halls) .. " hall slots, "
 				.. tostring(#(result.subconstructions or {}))
 				.. " subconstructions (tags " .. table.concat(tags, ",") .. "), "
 				.. tostring(stations) .. " stations, "

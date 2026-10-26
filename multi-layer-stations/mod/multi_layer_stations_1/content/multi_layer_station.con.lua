@@ -63,7 +63,12 @@ local function makeConstructionTemplates()
 				},
 				cargoTypeSet = {
 					cargoClassesExcluded = {},
-					cargoClassesIncluded = { "PASSENGERS" },
+					-- The stock idiom for a station that takes both, used by every
+					-- airport, small street stop and harbor: every freight cargo
+					-- declares UNIVERSAL plus one specialization, so these two
+					-- cover the lot. Both levels carry freight and the concourse
+					-- stores it, so the tile says so.
+					cargoClassesIncluded = { "PASSENGERS", "UNIVERSAL", },
 					cargoTypesExcluded = {},
 					cargoTypesIncluded = {},
 				},
