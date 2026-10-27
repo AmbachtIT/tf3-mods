@@ -88,11 +88,23 @@
 -- rather than a DLC. Stretched and cropped, flat concrete still reads as
 -- concrete.
 --
--- If masonry is ever wanted back, the lever is a **material of our own**:
--- `.mtl` files carry a `texcoord_scale` fragment property (`texCoordScale = 1`
--- in this very file's source material), so a copy with a larger scale would
--- tile a stone texture instead of smearing one crop of it. Untested, and it
--- only works with a seamless texture rather than an atlas.
+-- **The smear was the geometry's, and since 2026-10-26 it is gone.**
+-- `stoneFill` cuts every box into 4 m panels and 5.33 m courses now - the ratio
+-- the crop itself has - so no face is stretched at all. That did not make
+-- masonry viable again, which was the hope: 20 copies of one crop in a grid is
+-- wallpaper, and the only thing that broke it up was a varying quarter-turn,
+-- which turns the normal map with the piece and was reported from the game as
+-- rows *"translated in a stepped fashion"*. See `NOTES.md`, "The variation was
+-- the defect, not the repetition". A texture with nothing to repeat is worth
+-- more here than a better one, which is a second and stronger reason for the
+-- concrete.
+--
+-- The other lever, untried: `.mtl` files carry a `texcoord_scale` fragment
+-- property (`texCoordScale = 1` in this file's source material), so a copy with
+-- a larger scale tiles a texture instead of showing one crop of it. It cannot
+-- fix a stretch, because it scales both axes at once, and it needs a seamless
+-- texture rather than an atlas - but it is how to add detail without adding
+-- blocks.
 --
 -- **The collider is the point as much as the mesh is.** It is declared as
 -- exactly the mesh, so this piece can be scaled to a cell and stand flush

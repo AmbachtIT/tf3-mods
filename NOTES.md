@@ -2200,6 +2200,41 @@ loading, by adding or removing a module on the station. Only then does
 `updateFn` run against the restored param map.
 
 
+### Which changes need a rebuild, and which only need a restart
+
+Written down 2026-10-27 because it caught the author of this mod out: the
+textures came back wrong-looking, the fix was deployed, the game was restarted -
+and the station on screen was still the old one. *"I did have to rebuild though.
+Please document that some texture changes require a rebuild, because to me
+that's not intuitive."*
+
+It is not intuitive, and the reason is that the word "texture" covers two very
+different kinds of change:
+
+| what changed | what it takes to see it |
+| --- | --- |
+| a texture, a `.mtl`, a `.mdl` - the model's own mesh, material or collider | restart the game |
+| **which models a script emits, or where** - `updateFn`, a module's models, a transform, a tiling or panel size | restart **and rebuild every placed construction** |
+| a `.con.lua` or `.module.lua` parameter, slot or menu entry | restart, and rebuild to re-run `updateFn` |
+
+The dividing line is the one above: `updateFn` output is baked into the save, so
+anything a script *decided* is already decided for a station that exists.
+Resources are not baked - a placed construction holds a model's **name** and the
+engine resolves it at load - so a change inside a `.mdl` or a `.mtl` reaches an
+existing station on a restart alone. (The first row is the reasoning, and it is
+how the missing-material failures announced themselves at load rather than on
+rebuild; it has not been tested on its own.)
+
+What makes it confusing in practice is that an art problem is often not an art
+file. Cutting a stretched box into panels is a *texture* fix as the player sees
+it and a *geometry* change as the engine sees it, so it needs the rebuild even
+though nothing about the material moved. The test is not what the change looks
+like, it is which file it is in: anything in a `.script.lua` needs the rebuild.
+
+"Rebuild" means making the engine re-run `updateFn` against the placed
+construction: open it with the build tool and add or remove a module. Nothing
+else does it - not a save, not a reload, not a restart.
+
 ## A construction is only selectable if it contains a station-like component
 
 Clicking a placed construction opens nothing unless one of its subconstructions

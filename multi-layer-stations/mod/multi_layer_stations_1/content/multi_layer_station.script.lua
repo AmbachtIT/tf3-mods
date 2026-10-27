@@ -1049,12 +1049,33 @@ end
 --- centre. A support is six models now rather than a hundred and forty-four.
 local SUPPORT_BLOCK = "multi_layer_stations_1::/support_block.mdl"
 
---- How tall one course of the block is drawn.
+--- How wide one panel of the block is drawn, across x and across y.
 ---
---- Purely how the texture reads: the piece is a unit cube, so a 12 m support
---- drawn as a single instance stretches one stone pattern over 12 m. Courses of
---- 2 m keep it closer to masonry, at six models for a support instead of one.
-local SUPPORT_COURSE = 2.0
+--- Added 2026-10-26, when a loading block finally showed what its UVs do: one
+--- face of the cube is one fixed 0.25 x 0.333 crop of the material, and the
+--- model's scale does not touch UVs, so a 40 m hall wall drawn as one instance
+--- stretched that crop 20 to 1. Cutting the box up is the only thing that
+--- changes the ratio of a face's metres to its texels - no material setting
+--- can, because `texCoordScale` multiplies both axes at once.
+---
+--- 4 m is a cost choice as much as a look one, since the piece count is the
+--- product of all three cuts: a 40 x 6 x 10.7 hall wall is 20 blocks at 4 m
+--- against 5 before. The only thing that must not change is that the slices
+--- land exactly on the box's own bounds, which `sliceCount` guarantees.
+local SUPPORT_PANEL = 4.0
+
+--- How tall one course of the block is drawn: the panel width times 4/3.
+---
+--- Not a free number any more. The crop a face samples is 0.25 of the texture
+--- across by 0.3333 up, so on a square texture it is 0.75 as wide as it is
+--- tall, and a face shows it undistorted only when its own width is 0.75 of its
+--- height. At a 4 m panel that is a 5.33 m course, and the stone stops being
+--- stretched in either direction.
+---
+--- It was 2 m until 2026-10-27, from back when the block carried masonry and
+--- courses were meant to read as courses. Against a 4 m panel that is a 2.7:1
+--- stretch, which is most of what was left of the smear.
+local SUPPORT_COURSE = SUPPORT_PANEL * 4.0 / 3.0
 
 --- Supports are **placed by the player**, on their own slot layer at grade
 --- aligned to the grid of the level above.
@@ -1426,6 +1447,20 @@ end
 --- size, translate to the centre, no rotation, no tiling, no twin, nothing to
 --- compensate for. What is asked for is what is drawn and what the engine
 --- thinks is there.
+---
+--- **No rotation, and that is a result rather than an omission.** Varying a
+--- quarter-turn with the piece's place in the grid was tried on 2026-10-26, to
+--- stop one crop of the texture repeating in rows. Reported from the game:
+--- *"The texture looks worse than before. It appears there is some kind of
+--- texture indexing problem since the rows are all translated in a stepped
+--- fashion."* Which is exactly what it was. The four side crops of the concrete
+--- are near enough identical in albedo - 3.4 of 255 mean absolute difference,
+--- measured - but **13.8 in the normal map**, and a quarter-turn turns the
+--- normal map with the piece, so neighbouring panels catch the sun differently
+--- and the stretch runs across one and up the next. The turn count stepped by
+--- one along a row and by three up a course, so the mismatch stepped
+--- diagonally. Every piece laid the same way is a flat, continuous surface; it
+--- is the variation that reads as a defect.
 local function stoneBox(models, x0, x1, y0, y1, z0, z1)
 	local w, d, h = x1 - x0, y1 - y0, z1 - z0
 	if w <= 0.0 or d <= 0.0 or h <= 0.0 then return end
@@ -1437,17 +1472,42 @@ local function stoneBox(models, x0, x1, y0, y1, z0, z1)
 	}
 end
 
---- The same box, in courses, so the stone reads as masonry rather than as one
---- stretched texture. See `SUPPORT_COURSE`; the courses are sized to land
---- exactly on `z1`.
+--- How many equal slices of `pitch` a span of `size` is cut into. At least one,
+--- and rounded rather than floored so the slices land exactly on both ends.
+local function sliceCount(size, pitch)
+	return math.max(1, math.floor(size / pitch + 0.5))
+end
+
+--- The same box, cut into panels, so no face is stretched.
+---
+--- It used to cut in z only, in courses, which left a hall wall drawn as a
+--- single 40 m x 2 m instance - one face, one crop, stretched 20:1. That is the
+--- whole of *"the textures all look terrible"*, and the thing to understand
+--- about it is that no material setting can undo it: the cube's UVs are fixed,
+--- the model's scale does not touch them, and `texCoordScale` would multiply
+--- both axes and so keep the ratio. Only the geometry can change it, by being
+--- cut until a face is the shape of the crop it samples - 0.75 as wide as it is
+--- tall, which is what `SUPPORT_COURSE` is derived from.
+---
+--- So the cut is in all three axes, every piece laid the same way up (see
+--- `stoneBox`), and the price is the piece count, which is the product of the
+--- three: `blocks` on the `support draw:` line is there to keep it visible.
 local function stoneFill(models, x0, x1, y0, y1, z0, z1)
-	local height = z1 - z0
-	if height <= 0.0 then return end
-	local n = math.max(1, math.floor(height / SUPPORT_COURSE + 0.5))
-	local course = height / n
-	for i = 0, n - 1 do
-		stoneBox(models, x0, x1, y0, y1, z0 + course * i,
-			z0 + course * (i + 1))
+	local w, d, h = x1 - x0, y1 - y0, z1 - z0
+	if w <= 0.0 or d <= 0.0 or h <= 0.0 then return end
+	local nx = sliceCount(w, SUPPORT_PANEL)
+	local ny = sliceCount(d, SUPPORT_PANEL)
+	local nz = sliceCount(h, SUPPORT_COURSE)
+	local px, py, pz = w / nx, d / ny, h / nz
+	for i = 0, nx - 1 do
+		for j = 0, ny - 1 do
+			for k = 0, nz - 1 do
+				stoneBox(models,
+					x0 + px * i, x0 + px * (i + 1),
+					y0 + py * j, y0 + py * (j + 1),
+					z0 + pz * k, z0 + pz * (k + 1))
+			end
+		end
 	end
 end
 
@@ -4513,8 +4573,8 @@ return {
 		local dw, dd = drawnExtent(models)
 		local t = transform
 		logSupportDraw(string.format(
-			"slot=%d cell=%.1fx%.1f drawn=%.1fx%.1f at (%.1f,%.1f,%.1f) xAxis=(%.2f,%.2f)",
-			slotId, w, d, dw, dd,
+			"slot=%d cell=%.1fx%.1f drawn=%.1fx%.1f blocks=%d at (%.1f,%.1f,%.1f) xAxis=(%.2f,%.2f)",
+			slotId, w, d, dw, dd, #models,
 			t and t[13] or 0.0, t and t[14] or 0.0, t and t[15] or 0.0,
 			t and t[1] or 0.0, t and t[2] or 0.0))
 		for _i, m in ipairs(models) do

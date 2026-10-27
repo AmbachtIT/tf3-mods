@@ -5,6 +5,12 @@ Copies the mod into the Transport Fever 3 staging area.
 .DESCRIPTION
 Run after every edit, then restart the game - mods are read at startup.
 
+A restart is not always enough. `updateFn` output is baked into the save, so a
+change to what the script *emits* - geometry, slots, lanes, a panel size - only
+reaches a station that already exists when it is rebuilt: open it with the build
+tool and add or remove a module. Changes inside a .mdl or .mtl do reach it on a
+restart alone. Root NOTES.md, "Which changes need a rebuild".
+
 Deploys to staging_area\ only, on purpose. The staging area is a full mod
 install source in its own right - the game's precedence is Staging Area, then
 the manual mods\ folder, then subscribed mods - so a mod there is playable as
@@ -109,6 +115,12 @@ $Log = Join-Path $Local.FullName "crash_dump\stdout.txt"
 Write-Host "Log: $Log"
 Write-Host "  the mod logs with the prefix [multi-layer]"
 Write-Host "  note: stdout.txt is overwritten each session - copy it aside if a run matters"
+
+# The trap is art: a stretched texture is fixed in the script, not in a .mdl,
+# and so it needs the rebuild even though it looks like an art change.
+Write-Host "Restart the game. Script-emitted geometry also needs each placed"
+Write-Host "  station rebuilt - add or remove a module - because updateFn output"
+Write-Host "  is baked into the save. A .mdl or .mtl change needs only the restart."
 
 if ($Validate) {
 	# Syntax, from the usage strings inside TransportFever3.exe:

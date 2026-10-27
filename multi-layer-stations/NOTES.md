@@ -4073,6 +4073,77 @@ stone, so the result is more stone rather than a hole, and the real art is what
 resolves it.
 
 
+## The smear is anisotropy, and only the geometry can fix it
+
+Reported 2026-10-26, on the first run where the block actually loaded: *"The
+textures all look terrible, but they are placeholder art anyway. Is there a
+quick fix?"*
+
+The cube's UVs, read out of `placeholders/msh/cube_1x1_lod0.msh.blob` rather
+than inferred, are one cell of a 4 x 3 cube-cross atlas per face:
+
+    -x  u 0.00..0.25   -y  u 0.25..0.50   +x  u 0.50..0.75   +y  u 0.75..1.00
+    all four at v 0.333..0.667;  +z is u 0.25..0.50 v 0.667..1.00, -z below it
+
+One crop per face, and **the model's scale does not touch the UVs**. So a hall
+wall drawn as a single 40 m x 2 m instance stretches a 512 x 683 px crop to
+20:1. That is the whole complaint, and the thing to understand about it is that
+*no material setting can undo it*: `texCoordScale` multiplies both axes, so it
+adds repeats and keeps the stretch - finer streaks are still streaks. The
+anisotropy is the ratio of the face's metres to the crop's texels, and only
+geometry changes that ratio.
+
+So `stoneFill` cuts in all three axes now - `SUPPORT_PANEL` 4 m across,
+`SUPPORT_COURSE` 5.33 m up - and `blocks=` is on the `support draw:` line
+because the piece count is the product of three cuts: 20 for a 40 x 6 x 10.7
+hall wall against 5 before.
+
+The course is the panel times 4/3 rather than a number anyone liked, because a
+crop is 0.25 of the texture across by 0.3333 up: 0.75 as wide as it is tall on a
+square texture, so a face shows it undistorted only at that ratio. 4 x 2 was
+still a 2.7:1 stretch and 4 x 5.33 is none.
+
+### The variation was the defect, not the repetition
+
+The first cut also gave each piece a quarter-turn that varied with its place in
+the grid, to stop one crop repeating in rows. Reported from the game the next
+morning: *"The texture looks worse than before. It appears there is some kind of
+texture indexing problem since the rows are all translated in a stepped
+fashion."*
+
+There is no indexing problem; the turn was doing exactly what it was told. The
+turn count stepped by one along a row and by three up a course, so the pattern
+stepped diagonally - and what steps is more visible than it looks on paper,
+because:
+
+- the four side crops of the concrete differ by **3.4 of 255** in the albedo and
+  by **13.8 in the normal map** (mean absolute difference, measured), so what
+  varies between neighbours is mostly *how the light catches them*, not colour;
+- a quarter-turn turns the normal map with the piece, and it turns the stretch
+  with it too, so at 4 x 2 one panel smeared across and the next smeared up.
+
+Every piece laid the same way is a flat continuous surface with a faint seam
+every panel, and that is what it does now.
+
+Confirmed in-game 2026-10-27, *"much better"* - and it took a rebuild as well
+as a restart, which is its own finding: root `NOTES.md`, "Which changes need a
+rebuild, and which only need a restart". A panel size is a geometry change the
+player reads as a texture change, so it is baked into every station that already
+exists.
+
+**And the preview is why it was shipped.** The crops were composited at the real
+panel sizes before deploying (Pillow over the shipped `.dds`, throwaway scripts
+in the scratchpad) and the stepped version looked fine there - because an albedo
+composite has no lighting in it, and lighting was the whole of the difference. A
+still of the albedo answers "is this stretched" and cannot answer "does this
+read as one surface". Worth drawing, not worth trusting past that.
+
+The same preview is what settles the masonry question in the other direction:
+`abut_stone_alb` at 4 m panels all laid the same way is obvious wallpaper, 20
+copies of one crop in a grid. It only looked like a stone wall *with* the
+varying turn, which is the thing that failed. So the flat concrete stays, and
+the reason is no longer only that it smears least.
+
 ## Log lines that are not ours and not a problem
 
 Two of these cost a session's attention each before being traced, so they are
