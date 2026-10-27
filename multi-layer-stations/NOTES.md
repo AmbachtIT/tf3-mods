@@ -1,12 +1,16 @@
 # Notes
 
-Read out of the install at
+Why this mod is built the way it is: what was tried, what the game said, and
+where each number came from. Read out of the install at
 `C:\Program Files (x86)\Steam\steamapps\common\Transport Fever 3`, game build
-40408. **Nothing here is confirmed in-game yet** - see `PLAN.md` for the probes
-that would confirm it. The engine-general findings this builds on live in the
-root [NOTES.md](../NOTES.md): terrain alignment is opt-in per face,
-constructions have a native height offset, construction edges can be `BRIDGE` /
-`TUNNEL`, and a module is bound to its host construction's private API.
+40408, and then confirmed in-game - the early sections were written before any
+of it ran, and each one now says where it stands.
+
+The engine-general findings this builds on live in the root
+[NOTES.md](../NOTES.md): terrain alignment is opt-in per face, constructions
+have a native height offset, construction edges can be `BRIDGE` / `TUNNEL`, and
+a module is bound to its host construction's private API. Anything learned here
+that would still be true without this mod belongs there, not in this file.
 
 
 ## Scope

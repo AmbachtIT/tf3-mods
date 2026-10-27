@@ -53,7 +53,7 @@ In a second PowerShell window, start the log tail and leave it for the whole
 session:
 
 ```powershell
-Get-Content "C:\Program Files (x86)\Steam\userdata\49924974\3493540\local\crash_dump\stdout.txt" -Wait -Tail 40 |
+Get-Content "C:\Program Files (x86)\Steam\userdata\<id>\3493540\local\crash_dump\stdout.txt" -Wait -Tail 40 |
     Select-String "ml-probe|ERROR"
 ```
 

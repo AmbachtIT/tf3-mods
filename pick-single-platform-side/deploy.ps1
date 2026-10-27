@@ -5,6 +5,13 @@ Copies the mod into the Transport Fever 3 staging area.
 .DESCRIPTION
 Run after every edit, then restart the game - mods are read at startup.
 
+A restart is not always enough. `updateFn` output is baked into the save, so a
+change to what the script *emits* - geometry, slots, lanes - only reaches a
+construction that already exists when it is rebuilt: open it with the build tool
+and add or remove a module. This mod only seeds a template at placement, so a
+restart is all it needs; others are not so lucky. Root NOTES.md, "Which changes
+need a rebuild".
+
 Deploys to staging_area\ only, on purpose. The staging area is a full mod
 install source in its own right - the game's precedence is Staging Area, then
 the manual mods\ folder, then subscribed mods - so a mod there is playable as
