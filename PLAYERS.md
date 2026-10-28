@@ -90,3 +90,7 @@ and **overwrites it every time the game starts**, so copy it aside before
 relaunching if something went wrong. Each mod here writes its own lines with a
 prefix - `[multi-layer]` for Multi-layer Stations - and those lines are the
 fastest way to tell whether the mod is even running.
+
+If it is the mod's fault, please report it: the
+[README](README.md#reporting-a-problem) says what to put in the issue, and the
+short version is this log plus the savegame, and a list of your other mods.
