@@ -245,8 +245,22 @@ Each one needs a decision, not necessarily a fix:
 
 1. `.\deploy.ps1 -Validate` with the game **closed**. It runs the game's own
    validator over the staging area, which is what publishing runs anyway; judge
-   `levelPc` and `levelConsole`.
-2. Run the pre-publish set in [TESTS.md](TESTS.md).
+   `levelPc` and `levelConsole`. **Done, passed 2026-10-28** on the 21-file
+   release payload:
+
+   ```
+   PC      : level=Info critical=False
+   Console : level=Info critical=False
+   Messages: none
+   ```
+
+   with `Validation Passed without issues.` in the log, and the cook half ran -
+   so the console assets are checked too, not just the PC ones. The staging copy
+   is file-for-file identical to `mod\multi_layer_stations_1\` and there is no
+   second copy in `mods\`.
+2. Run the pre-publish set in [TESTS.md](TESTS.md). **Waived for v0.1** on
+   2026-10-28: the two T10 gaps, T7 step 4 and T8's recovery path go out unrun,
+   which is what a beta release of a mod whose own listing says *beta* is for.
 3. Publish from the in-game Mod Manager. It writes the numeric id into
    `_metadata/mod.io_fileid.txt` **in the staging area**, which `deploy.ps1`
    overwrites - so copy it back into the source tree immediately and add the id
